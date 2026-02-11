@@ -1,65 +1,213 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+import * as fabric from 'fabric';
+import { Layers, SlidersHorizontal } from 'lucide-react';
+import Toolbar from '@/components/editor/Toolbar';
+import PropertiesPanel from '@/components/editor/PropertiesPanel';
+import LayersPanel from '@/components/editor/LayersPanel';
+import { useIsMobile } from '@/lib/useIsMobile';
+import { undo, redo } from '@/lib/canvas-logic';
+
+// Fabric.js wymaga dostępu do DOM – ładujemy dynamicznie (SSR off)
+const StampCanvas = dynamic(() => import('@/components/editor/StampCanvas'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex flex-1 items-center justify-center text-zinc-400">
+      Ładowanie edytora…
+    </div>
+  ),
+});
+
+type MobilePanel = 'layers' | 'properties' | null;
 
 export default function Home() {
+  const [canvas, setCanvas] = useState<fabric.Canvas | null>(null);
+  const [selectedObject, setSelectedObject] = useState<fabric.FabricObject | null>(null);
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [showGrid, setShowGrid] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [activeMobilePanel, setActiveMobilePanel] = useState<MobilePanel>(null);
+
+  const isMobile = useIsMobile();
+
+  const handleCanvasReady = useCallback((c: fabric.Canvas) => {
+    setCanvas(c);
+  }, []);
+
+  const handleSelectionChange = useCallback((obj: fabric.FabricObject | null) => {
+    setSelectedObject(obj);
+    setRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleObjectModified = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+  }, []);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  }, []);
+
+  const toggleGrid = useCallback(() => {
+    setShowGrid((prev) => !prev);
+  }, []);
+
+  const toggleSnap = useCallback(() => {
+    setSnapToGrid((prev) => !prev);
+  }, []);
+
+  const handleUndo = useCallback(async () => {
+    if (!canvas) return;
+    await undo(canvas);
+    setSelectedObject(null);
+    setRefreshKey((k) => k + 1);
+  }, [canvas]);
+
+  const handleRedo = useCallback(async () => {
+    if (!canvas) return;
+    await redo(canvas);
+    setSelectedObject(null);
+    setRefreshKey((k) => k + 1);
+  }, [canvas]);
+
+  const toggleMobilePanel = useCallback((panel: MobilePanel) => {
+    setActiveMobilePanel((prev) => (prev === panel ? null : panel));
+  }, []);
+
+  const closeMobilePanel = useCallback(() => {
+    setActiveMobilePanel(null);
+  }, []);
+
+  const dark = theme === 'dark';
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <div
+      className={`flex flex-col h-screen overflow-hidden transition-colors duration-300 ${dark ? 'bg-zinc-900 text-zinc-100' : 'bg-zinc-50 text-zinc-900'
+        }`}
+    >
+      <Toolbar
+        canvas={canvas}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        showGrid={showGrid}
+        onToggleGrid={toggleGrid}
+        snapToGrid={snapToGrid}
+        onToggleSnap={toggleSnap}
+        isMobile={isMobile}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+      />
+
+      <div className="flex flex-1 overflow-hidden relative">
+        {/* Panel warstw – lewy (desktop) */}
+        {!isMobile && (
+          <LayersPanel
+            canvas={canvas}
+            selectedObject={selectedObject}
+            onSelectionChange={handleSelectionChange}
+            onObjectModified={handleObjectModified}
+            theme={theme}
+            refreshKey={refreshKey}
+            isMobile={false}
+            isOpen={true}
+            onClose={() => { }}
+          />
+        )}
+
+        {/* Canvas – środek / fullscreen na mobilce */}
+        <StampCanvas
+          onCanvasReady={handleCanvasReady}
+          onSelectionChange={handleSelectionChange}
+          onObjectModified={handleObjectModified}
+          theme={theme}
+          showGrid={showGrid}
+          snapToGrid={snapToGrid}
+          isMobile={isMobile}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        {/* Panel właściwości – prawy (desktop) */}
+        {!isMobile && (
+          <PropertiesPanel
+            selectedObject={selectedObject}
+            canvas={canvas}
+            theme={theme}
+            refreshKey={refreshKey}
+            isMobile={false}
+            isOpen={true}
+            onClose={() => { }}
+          />
+        )}
+      </div>
+
+      {/* ── Mobile: Bottom Sheet Panele ─────────────────── */}
+      {isMobile && (
+        <>
+          {/* Backdrop */}
+          {activeMobilePanel && (
+            <div
+              className="fixed inset-0 bg-black/40 z-40 transition-opacity"
+              onClick={closeMobilePanel}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          )}
+
+          {/* Layers bottom sheet */}
+          <LayersPanel
+            canvas={canvas}
+            selectedObject={selectedObject}
+            onSelectionChange={handleSelectionChange}
+            onObjectModified={handleObjectModified}
+            theme={theme}
+            refreshKey={refreshKey}
+            isMobile={true}
+            isOpen={activeMobilePanel === 'layers'}
+            onClose={closeMobilePanel}
+          />
+
+          {/* Properties bottom sheet */}
+          <PropertiesPanel
+            selectedObject={selectedObject}
+            canvas={canvas}
+            theme={theme}
+            refreshKey={refreshKey}
+            isMobile={true}
+            isOpen={activeMobilePanel === 'properties'}
+            onClose={closeMobilePanel}
+          />
+        </>
+      )}
+
+      {/* ── Mobile: Bottom Tab Bar ──────────────────────── */}
+      {isMobile && (
+        <div
+          className={`flex items-center justify-around py-2 border-t z-30 ${dark
+            ? 'bg-zinc-900 border-zinc-700'
+            : 'bg-white border-zinc-200'
+            }`}
+        >
+          <button
+            onClick={() => toggleMobilePanel('layers')}
+            className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-colors ${activeMobilePanel === 'layers'
+              ? 'text-indigo-400'
+              : dark ? 'text-zinc-400' : 'text-zinc-500'
+              }`}
           >
-            Documentation
-          </a>
+            <Layers size={20} />
+            <span className="text-[10px] font-medium">Warstwy</span>
+          </button>
+          <button
+            onClick={() => toggleMobilePanel('properties')}
+            className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-colors ${activeMobilePanel === 'properties'
+              ? 'text-indigo-400'
+              : dark ? 'text-zinc-400' : 'text-zinc-500'
+              }`}
+          >
+            <SlidersHorizontal size={20} />
+            <span className="text-[10px] font-medium">Właściwości</span>
+          </button>
         </div>
-      </main>
+      )}
     </div>
   );
 }
