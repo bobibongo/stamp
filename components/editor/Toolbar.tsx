@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Type, Square, Sun, Moon, Download, Grid3x3, Magnet, Menu, X, Undo2, Redo2, FileText, Image, ChevronDown } from 'lucide-react';
+import { Type, Square, Sun, Moon, Download, Grid3x3, Magnet, Menu, X, Undo2, Redo2, FileText, Image, ChevronDown, Ruler } from 'lucide-react';
 import * as fabric from 'fabric';
 import { addText, addRectFrame, saveState, STAMP_SIZES, StampSize } from '@/lib/canvas-logic';
 import { downloadPDF, downloadPDFFlattened } from '@/lib/export-logic';
@@ -37,6 +37,12 @@ export default function Toolbar({
 }: ToolbarProps) {
     const [menuOpen, setMenuOpen] = useState(false);
     const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+
+    // Custom Size State
+    const [customSizeModalOpen, setCustomSizeModalOpen] = useState(false);
+    const [customWidth, setCustomWidth] = useState('60');
+    const [customHeight, setCustomHeight] = useState('40');
 
     const handleAddText = () => {
         if (!canvas) return;
@@ -54,21 +60,40 @@ export default function Toolbar({
 
     const handleExportPDF = async () => {
         if (!canvas) return;
+        setExportMenuOpen(false);
         setMenuOpen(false);
         await downloadPDF(canvas, activeSize);
     };
 
     const handleExportPDFFlattened = async () => {
         if (!canvas) return;
+        setExportMenuOpen(false);
         setMenuOpen(false);
-        // Do flattened też przekazujemy rozmiar, jeśli funkcja tego wymaga (zaktualizowaliśmy ją)
-        // Sprawdźmy export-logic.ts - tak, canvas ma wymiary, ale warto być spójnym.
-        // Wg mojej zmiany exportPDFFlattened bierze wymiary z canvasa (.__stampWidthMm),
-        // które są aktualizowane przez updateStampSize. Więc argument size w funkcji download...
-        // W export-logic.ts: exportPDFFlattened(canvas).
-        // A downloadPDFFlattened wywołuje exportPDFFlattened.
-        // Więc jest OK.
         await downloadPDFFlattened(canvas);
+    };
+
+
+
+    const handleCustomSizeSubmit = () => {
+        const w = parseFloat(customWidth);
+        const h = parseFloat(customHeight);
+        if (isNaN(w) || isNaN(h)) {
+            alert('Proszę podać poprawne liczby.');
+            return;
+        }
+        if (w < 10 || w > 100 || h < 10 || h > 100) {
+            alert('Wymiary muszą mieścić się w zakresie 10-100 mm.');
+            return;
+        }
+        const newSize: StampSize = {
+            widthMm: w,
+            heightMm: h,
+            label: `${w} x ${h} mm`
+        };
+        onSizeChange(newSize);
+        setCustomSizeModalOpen(false);
+        setSizeMenuOpen(false);
+        setMenuOpen(false);
     };
 
     const dark = theme === 'dark';
@@ -78,6 +103,64 @@ export default function Toolbar({
     const btnActive = "bg-indigo-500 text-white shadow-lg shadow-indigo-500/30";
     const btnPrimary = dark ? "bg-zinc-800 text-zinc-100 hover:bg-zinc-700" : "bg-zinc-100 text-zinc-900 hover:bg-zinc-200";
     const divider = `w-px h-6 mx-1 ${dark ? 'bg-zinc-800' : 'bg-zinc-200'}`;
+
+    const CustomSizeModal = (
+        customSizeModalOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={(e) => e.stopPropagation()}>
+                <div className={`w-full max-w-xs p-6 rounded-xl shadow-2xl border ${dark ? 'bg-zinc-900 border-zinc-700' : 'bg-white border-zinc-200'
+                    }`}>
+                    <h3 className={`text-lg font-bold mb-4 ${dark ? 'text-zinc-100' : 'text-zinc-900'}`}>
+                        Wymiar niestandardowy
+                    </h3>
+
+                    <div className="space-y-4">
+                        <div>
+                            <label className={`block text-xs font-medium mb-1 ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                                Szerokość (mm)
+                            </label>
+                            <input
+                                type="number"
+                                value={customWidth}
+                                onChange={e => setCustomWidth(e.target.value)}
+                                className={`w-full p-2 rounded-lg border text-sm ${dark ? 'bg-zinc-950 border-zinc-800 text-zinc-100' : 'bg-zinc-50 border-zinc-300 text-zinc-900'
+                                    }`}
+                                min="10" max="100"
+                            />
+                        </div>
+                        <div>
+                            <label className={`block text-xs font-medium mb-1 ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                                Wysokość (mm)
+                            </label>
+                            <input
+                                type="number"
+                                value={customHeight}
+                                onChange={e => setCustomHeight(e.target.value)}
+                                className={`w-full p-2 rounded-lg border text-sm ${dark ? 'bg-zinc-950 border-zinc-800 text-zinc-100' : 'bg-zinc-50 border-zinc-300 text-zinc-900'
+                                    }`}
+                                min="10" max="100"
+                            />
+                        </div>
+
+                        <div className="flex gap-2 pt-2">
+                            <button
+                                onClick={() => setCustomSizeModalOpen(false)}
+                                className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${dark ? 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300' : 'bg-zinc-100 hover:bg-zinc-200 text-zinc-700'
+                                    }`}
+                            >
+                                Anuluj
+                            </button>
+                            <button
+                                onClick={handleCustomSizeSubmit}
+                                className="flex-1 py-2 text-sm font-medium rounded-lg bg-indigo-500 hover:bg-indigo-600 text-white transition-colors"
+                            >
+                                Zastosuj
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        )
+    );
 
     // Mobile layout
     if (isMobile) {
@@ -139,6 +222,24 @@ export default function Toolbar({
                                             {s.label}
                                         </button>
                                     ))}
+                                    <button
+                                        onClick={() => { setCustomSizeModalOpen(true); }}
+                                        className={`${btnBase} ${btnIcon} justify-start text-sm py-1.5 border-t border-dashed ${dark ? 'border-zinc-700' : 'border-zinc-200'} mt-1`}
+                                    >
+                                        <span className="w-4 h-4 mr-2 flex items-center justify-center">
+                                            <Ruler size={14} />
+                                        </span>
+                                        Wymiar własny...
+                                    </button>
+                                    <button
+                                        onClick={() => { setCustomSizeModalOpen(true); }}
+                                        className={`${btnBase} ${btnIcon} justify-start text-sm py-1.5 border-t border-dashed ${dark ? 'border-zinc-700' : 'border-zinc-200'} mt-1`}
+                                    >
+                                        <span className="w-4 h-4 mr-2 flex items-center justify-center">
+                                            <Ruler size={14} />
+                                        </span>
+                                        Wymiar własny...
+                                    </button>
                                 </div>
                             </div>
 
@@ -177,6 +278,7 @@ export default function Toolbar({
                         </div>
                     </div>
                 )}
+                {CustomSizeModal}
             </>
         );
     }
@@ -227,14 +329,23 @@ export default function Toolbar({
                                         key={s.label}
                                         onClick={() => { onSizeChange(s); setSizeMenuOpen(false); }}
                                         className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center ${activeSize.label === s.label
-                                                ? (dark ? 'bg-zinc-700 text-white' : 'bg-zinc-100 text-zinc-900')
-                                                : (dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50')
+                                            ? (dark ? 'bg-zinc-700 text-white' : 'bg-zinc-100 text-zinc-900')
+                                            : (dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50')
                                             }`}
                                     >
                                         <span className={`w-1.5 h-1.5 rounded-full mr-2 ${activeSize.label === s.label ? 'bg-indigo-500' : 'bg-transparent'}`} />
                                         {s.label}
                                     </button>
                                 ))}
+                                <button
+                                    onClick={() => { setCustomSizeModalOpen(true); setSizeMenuOpen(false); }}
+                                    className={`w-full text-left px-3 py-1.5 text-sm transition-colors flex items-center border-t border-dashed mt-1 ${dark ? 'text-zinc-300 hover:bg-zinc-700 border-zinc-700' : 'text-zinc-700 hover:bg-zinc-50 border-zinc-200'
+                                        }`}
+                                >
+                                    <span className="w-1.5 h-1.5 mr-2" /> {/* spacer */}
+                                    <Ruler size={14} className="mr-2 opacity-70" />
+                                    Wymiar własny...
+                                </button>
                             </div>
                         </>
                     )}
@@ -271,13 +382,53 @@ export default function Toolbar({
                     {dark ? <Sun size={20} /> : <Moon size={20} />}
                 </button>
 
-                <div className={divider} />
+                {/* Export Dropdown */}
+                <div className="relative">
+                    <button
+                        onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                        className={`${btnBase} ${btnActive}`}
+                    >
+                        <Download size={18} className="mr-2" />
+                        <span className="text-sm font-medium">Eksportuj</span>
+                        <ChevronDown size={14} className="ml-2 opacity-70" />
+                    </button>
 
-                <button onClick={handleExportPDF} className={`${btnBase} ${btnActive}`}>
-                    <Download size={18} className="mr-2" />
-                    <span className="text-sm font-medium">Eksport PDF</span>
-                </button>
+                    {exportMenuOpen && (
+                        <>
+                            <div className="fixed inset-0 z-10" onClick={() => setExportMenuOpen(false)} />
+                            <div className={`absolute top-full right-0 mt-1 w-56 rounded-lg shadow-xl overflow-hidden z-20 border py-1 ${dark ? 'bg-zinc-800 border-zinc-700' : 'bg-white border-zinc-200'
+                                }`}>
+                                <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>
+                                    Wybierz format
+                                </div>
+                                <button
+                                    onClick={handleExportPDF}
+                                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center ${dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50'
+                                        }`}
+                                >
+                                    <FileText size={16} className="mr-2 opacity-70" />
+                                    <div>
+                                        <div className="font-medium">PDF Wektorowy</div>
+                                        <div className="text-xs opacity-60">Najlepsza jakość, edytowalny</div>
+                                    </div>
+                                </button>
+                                <button
+                                    onClick={handleExportPDFFlattened}
+                                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center ${dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50'
+                                        }`}
+                                >
+                                    <Image size={16} className="mr-2 opacity-70" />
+                                    <div>
+                                        <div className="font-medium">PDF Obraz (1-bit)</div>
+                                        <div className="text-xs opacity-60">Bitmapa 1000 DPI, czarno-biała</div>
+                                    </div>
+                                </button>
+                            </div>
+                        </>
+                    )}
+                </div>
             </div>
+            {CustomSizeModal}
         </div>
     );
 }

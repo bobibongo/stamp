@@ -13,10 +13,11 @@ import {
 } from './canvas-logic';
 
 // Helpery
+// Helpery
 const MM_TO_PT = 72 / 25.4;
 
 function pxToMm(px: number): number {
-    return px / 3.78; // 1mm = 3.78px (from canvas-logic defines)
+    return px / PX_PER_MM;
 }
 
 function pxToPt(px: number): number {
@@ -35,14 +36,29 @@ function hexToRgb(hex: string) {
 }
 
 // Font Map
+// Struktura: Family -> { regular, bold, italic, boldItalic }
 const FONT_MAP: Record<string, { regular: string; bold?: string; italic?: string; boldItalic?: string }> = {
-    'Arimo': { regular: '/fonts/arimo/Arimo-Regular.ttf' },
-    'Tinos': { regular: '/fonts/tinos/Tinos-Regular.ttf', bold: '/fonts/tinos/Tinos-Bold.ttf' },
-    'Roboto': { regular: '/fonts/roboto/Roboto-Regular.ttf' },
-    'Montserrat': { regular: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Regular.ttf' },
+    'Arimo': {
+        regular: '/fonts/arimo/Arimo-Regular.ttf'
+    },
+    'Tinos': {
+        regular: '/fonts/tinos/Tinos-Regular.ttf',
+        bold: '/fonts/tinos/Tinos-Bold.ttf'
+    },
+    'Roboto': {
+        regular: '/fonts/roboto/Roboto-Regular.ttf'
+    },
+    'Montserrat': {
+        regular: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Regular.ttf',
+        bold: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Bold.ttf',
+        italic: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Italic.ttf',
+        boldItalic: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-BoldItalic.ttf'
+    },
     'Inter': {
         regular: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Regular.ttf',
-        bold: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Bold.ttf'
+        bold: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Bold.ttf',
+        italic: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Italic.ttf',
+        boldItalic: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-BoldItalic.ttf'
     }
 };
 
@@ -66,32 +82,60 @@ export async function exportPDF(canvas: fabric.Canvas): Promise<Blob> {
     const page = pdfDoc.addPage([pageW, pageH]);
 
     const objects = getUserObjects(canvas);
-    const usedFontFamilies = new Set<string>();
+
+    // Zbieramy potrzebne fonty (rodzina + wariant)
+    // Klucz w embeddedFonts to "Family-Variant" np. "Inter-bold"
+    const fontsToLoad = new Set<string>();
+
     for (const obj of objects) {
         if (isTextObject(obj)) {
             const t = obj as fabric.IText;
-            usedFontFamilies.add(t.fontFamily || 'Inter');
+            const family = t.fontFamily || 'Inter';
+            const isBold = (t.fontWeight === 'bold' || t.fontWeight === 700);
+            const isItalic = (t.fontStyle === 'italic');
+
+            let variant = 'regular';
+            if (isBold && isItalic) variant = 'boldItalic';
+            else if (isBold) variant = 'bold';
+            else if (isItalic) variant = 'italic';
+
+            fontsToLoad.add(`${family}|${variant}`);
         }
     }
 
     const embeddedFonts: Record<string, any> = {};
     const fallbackFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
-    for (const family of usedFontFamilies) {
+    for (const fontKey of fontsToLoad) {
+        const [family, variant] = fontKey.split('|');
         const mapping = FONT_MAP[family];
+
         if (!mapping) {
-            console.warn(`Font "${family}" nie ma mapowania TTF, użyję Helvetica jako fallback`);
-            embeddedFonts[family] = fallbackFont;
+            console.warn(`Font "${family}" nieznany, fallback do Helvetica`);
+            embeddedFonts[fontKey] = fallbackFont;
             continue;
         }
+
+        // Próba znalezienia pliku dla wariantu
+        // Jeśli brak wariantu (np. brak bold), spróbuj regular
+        // Uwaga: PDF-lib nie robi "fake bold", więc jeśli brak pliku, będzie regular.
+        let fontUrl = (mapping as any)[variant];
+        if (!fontUrl) {
+            // Fallback logic
+            if (variant === 'boldItalic') fontUrl = mapping.bold || mapping.italic || mapping.regular;
+            else if (variant === 'bold') fontUrl = mapping.regular;
+            else if (variant === 'italic') fontUrl = mapping.regular;
+        }
+
+        if (!fontUrl) fontUrl = mapping.regular;
+
         try {
-            const fontBytes = await fetchFontBytes(mapping.regular);
-            // Wyłącz subsetting, aby uniknąć błędów brakujących glifów i problemów z mapowaniem (Bugfix #1)
+            const fontBytes = await fetchFontBytes(fontUrl);
             const embedded = await pdfDoc.embedFont(fontBytes, { subset: false });
-            embeddedFonts[family] = embedded;
+            embeddedFonts[fontKey] = embedded;
         } catch (e) {
-            console.error(`Błąd osadzania fontu "${family}":`, e);
-            embeddedFonts[family] = fallbackFont;
+            console.error(`Błąd osadzania fontu "${fontKey}":`, e);
+            embeddedFonts[fontKey] = fallbackFont;
         }
     }
 
@@ -120,16 +164,15 @@ export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
     const pageH = hMm * MM_TO_PT;
     const page = pdfDoc.addPage([pageW, pageH]);
 
-    // 1. Zapisz stan widoku (viewport)
+    // 1. Zapisz stan
     const originalVpt = canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
     const originalSelection = canvas.selection;
-    const originalBg = canvas.backgroundColor; // Zapisz tło
+    const originalBg = canvas.backgroundColor;
 
-    // 2. Ukryj obiekty systemowe (linie pomocnicze, safe zone, border)
-    //    oraz zaznaczenie (selection)
+    // 2. Przygotuj canvas
     canvas.discardActiveObject();
-    canvas.selection = false; // Blokada zaznaczania
-    canvas.backgroundColor = ''; // Usuń tło (przezroczystość) na czas eksportu
+    canvas.selection = false;
+    canvas.backgroundColor = '#ffffff'; // Białe tło dla poprawnej binaryzacji (brak przezroczystości)
 
     const objectsToHide: fabric.FabricObject[] = [];
     canvas.getObjects().forEach((obj) => {
@@ -141,47 +184,84 @@ export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
         }
     });
 
-    // Wymuś odświeżenie przed zrzutem
     canvas.renderAll();
 
-    // 3. Rasteryzacja canvas w SUPER wysokiej rozdzielczości (1000 DPI)
-    // 1000 DPI: STAMP_W_MM * (1000/25.4) px ≈ 2362 px szerokości
-    const targetDPI = 1000;
-    const targetWidthPx = Math.round(wMm * (targetDPI / 25.4));
-    const multiplier = targetWidthPx / widthPx;
+    // 3. Rasteryzacja 2000 DPI
+    const targetDPI = 2000;
+    const multiplier = (targetDPI / 25.4) * (25.4 / 96); // aprox factor 
+    // Prościej: widthPx to 96DPI (domyślnie). Chcemy 2000DPI.
+    // Factor = 2000 / 96 ≈ 20.8
+    const scaleFactor = 2000 / 96;
 
-    // Ustaw viewport na 1:1, aby zrzut był poprawny (czasem multiplier wariuje przy zoomie)
     canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
 
+    // Generujemy duży obraz w formacie PNG
     const dataUrl = canvas.toDataURL({
         format: 'png',
-        multiplier,
+        multiplier: scaleFactor,
         left: WORK_AREA_LEFT,
         top: WORK_AREA_TOP,
         width: widthPx,
         height: heightPx,
+        enableRetinaScaling: true
     });
 
-    // 4. Przywróć stan (widoczność i viewport)
-    objectsToHide.forEach((obj) => {
-        obj.visible = true;
+    // 4. Binaryzacja (1-bit Black & White)
+    // Musimy załadować obraz do tymczasowego Canvas API
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = dataUrl;
     });
 
-    // Przywróć viewport (ważne! naprawia "psucie się układu")
-    try {
-        // Przywracamy transformację
-        canvas.setViewportTransform(originalVpt);
-    } catch (e) {
-        console.error('Błąd przywracania viewportu:', e);
-        canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = image.width;
+    tempCanvas.height = image.height;
+    const ctx = tempCanvas.getContext('2d');
+
+    if (!ctx) throw new Error('Cannot get 2d context for binarization');
+
+    ctx.drawImage(image, 0, 0);
+    const imageData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+    const data = imageData.data;
+
+    // Progowanie (Thresholding)
+    // Zamieniamy każdy piksel na czarny (0,0,0,255) lub biały (255,255,255,255)
+    // Ignorujemy alpha (przyjmujemy że tło jest białe, co ustawiliśmy wcześniej)
+    const threshold = 120; // 0-255
+
+    for (let i = 0; i < data.length; i += 4) {
+        // Średnia jasność RGB
+        const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+
+        if (brightness < threshold) {
+            // Czarny
+            data[i] = 0;
+            data[i + 1] = 0;
+            data[i + 2] = 0;
+        } else {
+            // Biały
+            data[i] = 255;
+            data[i + 1] = 255;
+            data[i + 2] = 255;
+        }
+        // Alpha zawsze pełna
+        data[i + 3] = 255;
     }
 
+    ctx.putImageData(imageData, 0, 0);
+    const processedDataUrl = tempCanvas.toDataURL('image/png');
+
+    // 5. Przywróć stan
+    objectsToHide.forEach(obj => obj.visible = true);
+    try { canvas.setViewportTransform(originalVpt); } catch { }
     canvas.selection = originalSelection;
-    canvas.backgroundColor = originalBg; // Przywróć tło
+    canvas.backgroundColor = originalBg;
     canvas.requestRenderAll();
 
-    // Konwersja dataURL → bytes
-    const base64 = dataUrl.split(',')[1];
+    // 6. Osadź w PDF
+    const base64 = processedDataUrl.split(',')[1];
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
@@ -208,7 +288,7 @@ export async function downloadPDF(canvas: fabric.Canvas, size: StampSize) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `pieczatka_${size.widthMm}x${size.heightMm}.pdf`;
+        a.download = `pieczatka_${size.widthMm}x${size.heightMm}_wektor.pdf`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -225,7 +305,7 @@ export async function downloadPDFFlattened(canvas: fabric.Canvas) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'pieczatka_flat.pdf';
+        a.download = 'pieczatka_1bit_2000dpi.pdf';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
@@ -264,12 +344,6 @@ function renderRect(
     const strokeWidthPx = rect.strokeWidth || 1;
     const strokeWidthPt = pxToPt(strokeWidthPx);
 
-    // Pozycja
-    // rect.left/top is origin.
-    // bounding rect logic...
-    // Fabric rect with stroke is drawn centered on path?
-    // Assuming simple rect for now.
-
     rect.setCoords();
     const bounds = rect.getBoundingRect();
     const boundsLeft = bounds.left - WORK_AREA_LEFT;
@@ -293,7 +367,7 @@ function renderRect(
         height: hPt,
         borderColor: strokeColor,
         borderWidth: strokeWidthPt,
-        color: undefined, // No fill for frames usually
+        color: undefined,
     });
 }
 
@@ -308,8 +382,17 @@ function renderText(
     const text = textObj.text || '';
     if (!text.trim()) return;
 
-    const fontFamily = textObj.fontFamily || 'Inter';
-    const font = embeddedFonts[fontFamily] || fallbackFont;
+    const family = textObj.fontFamily || 'Inter';
+    const isBold = (textObj.fontWeight === 'bold' || textObj.fontWeight === 700);
+    const isItalic = (textObj.fontStyle === 'italic');
+
+    let variant = 'regular';
+    if (isBold && isItalic) variant = 'boldItalic';
+    else if (isBold) variant = 'bold';
+    else if (isItalic) variant = 'italic';
+
+    const fontKey = `${family}|${variant}`;
+    const font = embeddedFonts[fontKey] || fallbackFont;
 
     // Use unscaled font size for PDF (scaling handled by CTM)
     const fontSize = textObj.fontSize || 14;
@@ -323,17 +406,7 @@ function renderText(
     const cxPx = textObj.left || 0;
     const cyPx = textObj.top || 0; // Fabric Y
 
-    // Note: Fabric's left/top depend on origin.
-    // If we assume origin is center, then left/top IS center.
-    // If not, we should use getCenterPoint().
-    // userObjects usually have originX/Y set? Step 208 logic used getBoundingRect.
-    // But matrix transform works best with center.
-    // Let's assume originX='center', originY='center' as per stamp app logic.
-    // Even if not, converting anchor to PDF coords (bottom-left origin) matches.
-
     // Convert canvas coords to PDF page coords
-    // Canvas (0,0) is top-left.
-    // Our Work Area starts at WORK_AREA_LEFT, WORK_AREA_TOP.
     const relX = cxPx - WORK_AREA_LEFT;
     const relY = cyPx - WORK_AREA_TOP;
 
