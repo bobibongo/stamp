@@ -5,8 +5,7 @@ import * as fabric from 'fabric';
 import {
     AVAILABLE_FONTS,
     PX_PER_MM,
-    STAMP_W_MM,
-    STAMP_H_MM,
+    DEFAULT_SIZE,
     debounce,
     alignObject,
     resetProportions,
@@ -63,6 +62,7 @@ export default function PropertiesPanel({
     const [isUnderline, setIsUnderline] = useState(false);
     const [textAlign, setTextAlign] = useState<string>('center');
     const [fontSizeWarning, setFontSizeWarning] = useState(false);
+    const [stampDim, setStampDim] = useState({ w: DEFAULT_SIZE.widthMm, h: DEFAULT_SIZE.heightMm });
 
     // ── Stan ramki ────────────────────────────────────────
     const [strokeWidth, setStrokeWidth] = useState(0.5);
@@ -87,7 +87,19 @@ export default function PropertiesPanel({
         if ((selectedObject as any).__stampType === 'frame') {
             setStrokeWidth((selectedObject as any).__strokeWidth_mm || 0.5);
         }
+        if ((selectedObject as any).__stampType === 'frame') {
+            setStrokeWidth((selectedObject as any).__strokeWidth_mm || 0.5);
+        }
     }, [selectedObject, refreshKey]);
+
+    // ── Sync stamp dimensions from canvas ─────────────────
+    useEffect(() => {
+        if (canvas) {
+            const w = (canvas as any).__stampWidthMm || DEFAULT_SIZE.widthMm;
+            const h = (canvas as any).__stampHeightMm || DEFAULT_SIZE.heightMm;
+            setStampDim({ w, h });
+        }
+    }, [canvas, refreshKey]);
 
     // ── Debounced canvas render ───────────────────────────
     const debouncedRender = useMemo(
@@ -233,7 +245,7 @@ export default function PropertiesPanel({
                             className={`text-lg font-semibold ${dark ? 'text-zinc-100' : 'text-zinc-800'
                                 }`}
                         >
-                            {STAMP_W_MM} × {STAMP_H_MM} mm
+                            {stampDim.w} × {stampDim.h} mm
                         </p>
                     </div>
                     <div>

@@ -12,11 +12,10 @@ import {
     saveState,
     undo,
     redo,
-    CANVAS_TOTAL_W,
-    CANVAS_TOTAL_H,
-    STAMP_W_MM,
-    STAMP_H_MM,
+    updateStampSize,
+    StampSize,
     PX_PER_MM,
+    getCanvasDimensions,
 } from '@/lib/canvas-logic';
 
 interface StampCanvasProps {
@@ -27,6 +26,7 @@ interface StampCanvasProps {
     showGrid: boolean;
     snapToGrid: boolean;
     isMobile: boolean;
+    stampSize: StampSize;
 }
 
 const ZOOM_MIN = 0.3;
@@ -41,6 +41,7 @@ export default function StampCanvas({
     showGrid,
     snapToGrid,
     isMobile,
+    stampSize,
 }: StampCanvasProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fabricRef = useRef<fabric.Canvas | null>(null);
@@ -73,7 +74,8 @@ export default function StampCanvas({
     useEffect(() => {
         if (!canvasRef.current || fabricRef.current) return;
 
-        const canvas = initCanvas(canvasRef.current);
+        // Inicjalizacja z początkowym rozmiarem
+        const canvas = initCanvas(canvasRef.current, stampSize);
         fabricRef.current = canvas;
 
         canvas.on('selection:created', handleSelection);
@@ -144,16 +146,24 @@ export default function StampCanvas({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // ── Obsługa zmiany rozmiaru pieczątki ───────────────────
+    useEffect(() => {
+        if (!fabricRef.current) return;
+        updateStampSize(fabricRef.current, stampSize);
+    }, [stampSize]);
+
     // ── Auto-fit zoom for mobile ──────────────────────────
     useEffect(() => {
         if (!isMobile || !wrapperRef.current) return;
         const wrapper = wrapperRef.current;
         const padding = 16;
         const availW = wrapper.clientWidth - padding * 2;
-        const fitZoom = Math.min(availW / CANVAS_TOTAL_W, 1);
+        // Oblicz totalW dynamicznie dla obecnego rozmiaru
+        const { totalW } = getCanvasDimensions(stampSize.widthMm, stampSize.heightMm);
+        const fitZoom = Math.min(availW / totalW, 1);
         const clampedZoom = Math.max(ZOOM_MIN, Math.round(fitZoom * 100) / 100);
         setZoom(clampedZoom);
-    }, [isMobile]);
+    }, [isMobile, stampSize]);
 
     // ── Zoom via Fabric.js setZoom ──────────────────────────
     useEffect(() => {
@@ -161,12 +171,13 @@ export default function StampCanvas({
         if (!canvas) return;
 
         canvas.setZoom(zoom);
+        const { totalW, totalH } = getCanvasDimensions(stampSize.widthMm, stampSize.heightMm);
         canvas.setDimensions({
-            width: CANVAS_TOTAL_W * zoom,
-            height: CANVAS_TOTAL_H * zoom,
+            width: totalW * zoom,
+            height: totalH * zoom,
         });
         canvas.renderAll();
-    }, [zoom]);
+    }, [zoom, stampSize]);
 
     // Ctrl+Scroll zoom (desktop) + pinch-to-zoom (mobile)
     useEffect(() => {
@@ -253,7 +264,8 @@ export default function StampCanvas({
         if (isMobile && wrapperRef.current) {
             const padding = 16;
             const availW = wrapperRef.current.clientWidth - padding * 2;
-            const fitZoom = Math.min(availW / CANVAS_TOTAL_W, 1);
+            const { totalW } = getCanvasDimensions(stampSize.widthMm, stampSize.heightMm);
+            const fitZoom = Math.min(availW / totalW, 1);
             setZoom(Math.max(ZOOM_MIN, Math.round(fitZoom * 100) / 100));
         } else {
             setZoom(1);
@@ -293,12 +305,13 @@ export default function StampCanvas({
             <div className="flex flex-1 items-center justify-center overflow-auto p-4">
                 <div className="relative">
                     <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-zinc-400 font-medium select-none whitespace-nowrap">
-                        {STAMP_W_MM} × {STAMP_H_MM} mm
+                        {stampSize.widthMm} × {stampSize.heightMm} mm
                     </div>
                     <canvas
                         ref={canvasRef}
-                        width={CANVAS_TOTAL_W}
-                        height={CANVAS_TOTAL_H}
+                        // Wymiary początkowe (zostaną nadpisane przez fabric)
+                        width={getCanvasDimensions(stampSize.widthMm, stampSize.heightMm).totalW}
+                        height={getCanvasDimensions(stampSize.widthMm, stampSize.heightMm).totalH}
                         className="rounded-lg shadow-2xl"
                     />
                 </div>

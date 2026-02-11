@@ -2,18 +2,37 @@ import * as fabric from 'fabric';
 
 // ── Stałe przelicznikowe ──────────────────────────────────
 export const PX_PER_MM = 3.78;
-export const STAMP_W_MM = 60;
-export const STAMP_H_MM = 40;
-export const STAMP_W_PX = Math.round(STAMP_W_MM * PX_PER_MM);
-export const STAMP_H_PX = Math.round(STAMP_H_MM * PX_PER_MM);
+
+export interface StampSize {
+  widthMm: number;
+  heightMm: number;
+  label: string;
+}
+
+export const STAMP_SIZES: StampSize[] = [
+  { widthMm: 38, heightMm: 14, label: '38 x 14 mm' },
+  { widthMm: 47, heightMm: 18, label: '47 x 18 mm' },
+  { widthMm: 58, heightMm: 22, label: '58 x 22 mm' },
+];
+
+export const DEFAULT_SIZE = STAMP_SIZES[0];
 
 // Marginesy wokół pieczątki na canvas (miejsce na linijki)
 export const RULER_SIZE = 24; // px – grubość linijki
 export const CANVAS_PADDING = 40; // px – padding za linijką
 export const WORK_AREA_LEFT = RULER_SIZE + CANVAS_PADDING;
 export const WORK_AREA_TOP = RULER_SIZE + CANVAS_PADDING;
-export const CANVAS_TOTAL_W = STAMP_W_PX + WORK_AREA_LEFT + CANVAS_PADDING;
-export const CANVAS_TOTAL_H = STAMP_H_PX + WORK_AREA_TOP + CANVAS_PADDING;
+
+export function getCanvasDimensions(widthMm: number, heightMm: number) {
+  const wPx = Math.round(widthMm * PX_PER_MM);
+  const hPx = Math.round(heightMm * PX_PER_MM);
+  return {
+    widthPx: wPx,
+    heightPx: hPx,
+    totalW: wPx + WORK_AREA_LEFT + CANVAS_PADDING,
+    totalH: hPx + WORK_AREA_TOP + CANVAS_PADDING
+  };
+}
 
 // Margines bezpieczeństwa (1mm od krawędzi)
 export const SAFETY_MARGIN_MM = 1;
@@ -54,10 +73,12 @@ export const AVAILABLE_FONTS = [
 export type FontName = (typeof AVAILABLE_FONTS)[number];
 
 // ── Inicjalizacja Canvas ──────────────────────────────────
-export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
+export function initCanvas(canvasEl: HTMLCanvasElement, size: StampSize = DEFAULT_SIZE): fabric.Canvas {
+  const { widthPx, heightPx, totalW, totalH } = getCanvasDimensions(size.widthMm, size.heightMm);
+
   const canvas = new fabric.Canvas(canvasEl, {
-    width: CANVAS_TOTAL_W,
-    height: CANVAS_TOTAL_H,
+    width: totalW,
+    height: totalH,
     backgroundColor: '#e5e5e5',
     selection: true,
     preserveObjectStacking: true,
@@ -65,12 +86,17 @@ export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
     snapThreshold: SNAP_THRESHOLD,
   });
 
+
+  // Przechowujemy wymiary w canvasie dla funkcji pomocniczych
+  (canvas as any).__stampWidthMm = size.widthMm;
+  (canvas as any).__stampHeightMm = size.heightMm;
+
   // Biały prostokąt = obszar roboczy pieczątki
   const workArea = new fabric.Rect({
     left: WORK_AREA_LEFT,
     top: WORK_AREA_TOP,
-    width: STAMP_W_PX,
-    height: STAMP_H_PX,
+    width: widthPx,
+    height: heightPx,
     fill: '#ffffff',
     selectable: false,
     evented: false,
@@ -83,8 +109,8 @@ export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
   const workAreaBorder = new fabric.Rect({
     left: WORK_AREA_LEFT,
     top: WORK_AREA_TOP,
-    width: STAMP_W_PX,
-    height: STAMP_H_PX,
+    width: widthPx,
+    height: heightPx,
     fill: 'transparent',
     stroke: '#d4d4d4',
     strokeWidth: 1,
@@ -100,8 +126,8 @@ export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
   const safetyRect = new fabric.Rect({
     left: WORK_AREA_LEFT + SAFETY_MARGIN_PX,
     top: WORK_AREA_TOP + SAFETY_MARGIN_PX,
-    width: STAMP_W_PX - SAFETY_MARGIN_PX * 2,
-    height: STAMP_H_PX - SAFETY_MARGIN_PX * 2,
+    width: widthPx - SAFETY_MARGIN_PX * 2,
+    height: heightPx - SAFETY_MARGIN_PX * 2,
     fill: 'transparent',
     stroke: '#ef4444',
     strokeWidth: 0.5,
@@ -131,9 +157,13 @@ export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
     const obj = e.target as fabric.IText | undefined;
     if (!obj || obj.type !== 'i-text') return;
     obj.setCoords();
+    obj.setCoords();
     const b = obj.getBoundingRect();
-    if (b.width > safeW() || b.height > safeH()) {
-      const ratio = Math.min(safeW() / b.width, safeH() / b.height, 1);
+    const sw = safeW(obj.canvas as fabric.Canvas);
+    const sh = safeH(obj.canvas as fabric.Canvas);
+
+    if (b.width > sw || b.height > sh) {
+      const ratio = Math.min(sw / b.width, sh / b.height, 1);
       if (ratio < 1) {
         const s = (obj.scaleX || 1) * ratio;
         obj.set({ scaleX: s, scaleY: (obj.scaleY || 1) * ratio });
@@ -168,13 +198,73 @@ export function initCanvas(canvasEl: HTMLCanvasElement): fabric.Canvas {
   return canvas;
 }
 
+export function updateStampSize(canvas: fabric.Canvas, size: StampSize) {
+  const { widthPx, heightPx, totalW, totalH } = getCanvasDimensions(size.widthMm, size.heightMm);
+
+  canvas.setDimensions({ width: totalW, height: totalH });
+
+  (canvas as any).__stampWidthMm = size.widthMm;
+  (canvas as any).__stampHeightMm = size.heightMm;
+  (canvas as any).__stampLabel = size.label;
+
+  const objects = canvas.getObjects();
+  // Zakładamy kolejność dodawania w initCanvas: 0=workArea, 1=border, 2=safety
+  // Dla pewności można szukać po cechach, ale initCanvas jest deterministyczny.
+  // Użyjmy bezpieczniejszego wyszukiwania.
+
+  const workArea = objects.find(o => (o as any).__systemObject && o.fill === '#ffffff') as fabric.Rect;
+  const border = objects.find(o => (o as any).__systemObject && o.stroke === '#d4d4d4') as fabric.Rect;
+  const safety = objects.find(o => (o as any).__systemObject && o.stroke === '#ef4444') as fabric.Rect;
+
+  if (workArea) {
+    workArea.set({ width: widthPx, height: heightPx });
+    workArea.setCoords();
+  }
+  if (border) {
+    border.set({ width: widthPx, height: heightPx });
+    border.setCoords();
+  }
+  if (safety) {
+    safety.set({
+      width: widthPx - SAFETY_MARGIN_PX * 2,
+      height: heightPx - SAFETY_MARGIN_PX * 2,
+    });
+    safety.setCoords();
+  }
+
+  canvas.requestRenderAll();
+}
+
 // ── Granice safety zone ───────────────────────────────────
+// Pobieramy wymiary z obiektu canvas (jeśli dostępny)
+const getDim = (canvas?: fabric.Canvas) => {
+  const wMm = (canvas as any)?.__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
+  return {
+    wPx: Math.round(wMm * PX_PER_MM),
+    hPx: Math.round(hMm * PX_PER_MM)
+  };
+};
+
+const safeW = (canvas?: fabric.Canvas) => {
+  const { wPx } = getDim(canvas);
+  return wPx - SAFETY_MARGIN_PX * 2;
+};
+const safeH = (canvas?: fabric.Canvas) => {
+  const { hPx } = getDim(canvas);
+  return hPx - SAFETY_MARGIN_PX * 2;
+};
+
 const safeMinX = () => WORK_AREA_LEFT + SAFETY_MARGIN_PX;
 const safeMinY = () => WORK_AREA_TOP + SAFETY_MARGIN_PX;
-const safeMaxX = () => WORK_AREA_LEFT + STAMP_W_PX - SAFETY_MARGIN_PX;
-const safeMaxY = () => WORK_AREA_TOP + STAMP_H_PX - SAFETY_MARGIN_PX;
-const safeW = () => STAMP_W_PX - SAFETY_MARGIN_PX * 2;
-const safeH = () => STAMP_H_PX - SAFETY_MARGIN_PX * 2;
+const safeMaxX = (canvas?: fabric.Canvas) => {
+  const { wPx } = getDim(canvas);
+  return WORK_AREA_LEFT + wPx - SAFETY_MARGIN_PX;
+};
+const safeMaxY = (canvas?: fabric.Canvas) => {
+  const { hPx } = getDim(canvas);
+  return WORK_AREA_TOP + hPx - SAFETY_MARGIN_PX;
+};
 
 // ── Hard boundary – pozycja ───────────────────────────────
 // Jeśli obiekt mieści się w safe zone → clamp do granic.
@@ -190,21 +280,21 @@ export function clampPosition(obj: fabric.FabricObject | undefined) {
   let left: number;
   let top: number;
 
-  if (b.width >= safeW()) {
+  if (b.width >= safeW(obj.canvas as fabric.Canvas)) {
     // Obiekt szerszy niż safe zone → przypnij do lewej
     left = safeMinX() + dL;
   } else {
     // Clamp: left nie mniejszy niż min, ale też bRight nie większy niż max
     const minLeft = safeMinX() + dL;
-    const maxLeft = safeMaxX() - b.width + dL;
+    const maxLeft = safeMaxX(obj.canvas as fabric.Canvas) - b.width + dL;
     left = Math.max(minLeft, Math.min(maxLeft, obj.left!));
   }
 
-  if (b.height >= safeH()) {
+  if (b.height >= safeH(obj.canvas as fabric.Canvas)) {
     top = safeMinY() + dT;
   } else {
     const minTop = safeMinY() + dT;
-    const maxTop = safeMaxY() - b.height + dT;
+    const maxTop = safeMaxY(obj.canvas as fabric.Canvas) - b.height + dT;
     top = Math.max(minTop, Math.min(maxTop, obj.top!));
   }
 
@@ -225,8 +315,11 @@ function clampScaling(obj: fabric.FabricObject | undefined) {
   if (obj.type === 'i-text') {
     let sx = obj.scaleX || 1;
     let sy = obj.scaleY || 1;
-    if (b.width > safeW()) sx *= safeW() / b.width;
-    if (b.height > safeH()) sy *= safeH() / b.height;
+    const sw = safeW(obj.canvas as fabric.Canvas);
+    const sh = safeH(obj.canvas as fabric.Canvas);
+
+    if (b.width > sw) sx *= sw / b.width;
+    if (b.height > sh) sy *= sh / b.height;
     obj.set({ scaleX: sx, scaleY: sy });
     obj.setCoords();
     clampPosition(obj);
@@ -234,9 +327,12 @@ function clampScaling(obj: fabric.FabricObject | undefined) {
   }
 
   // Inne obiekty (ramki itp.): uniform clamping
-  if (b.width > safeW() || b.height > safeH()) {
-    const ratioW = safeW() / b.width;
-    const ratioH = safeH() / b.height;
+  const sw = safeW(obj.canvas as fabric.Canvas);
+  const sh = safeH(obj.canvas as fabric.Canvas);
+
+  if (b.width > sw || b.height > sh) {
+    const ratioW = sw / b.width;
+    const ratioH = sh / b.height;
     const ratio = Math.min(ratioW, ratioH, 1);
     if (ratio < 1) {
       obj.set({
@@ -279,24 +375,28 @@ export function drawRulersAndGrid(
   const rulerLine = dark ? '#3f3f46' : '#d4d4d8';
   const gridColor = dark ? 'rgba(99,102,241,0.12)' : 'rgba(99,102,241,0.1)';
 
+  const wMm = (canvas as any).__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any).__stampHeightMm || DEFAULT_SIZE.heightMm;
+  const { widthPx, heightPx, totalW: canvasTotalW, totalH: canvasTotalH } = getCanvasDimensions(wMm, hMm);
+
   // ── Siatka (w screen space – z jawnym zoom) ──────────────
   if (showGrid) {
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0); // reset do pikseli ekranu
     ctx.strokeStyle = gridColor;
     ctx.lineWidth = 0.5;
-    for (let mm = GRID_SIZE_MM; mm < STAMP_W_MM; mm += GRID_SIZE_MM) {
+    for (let mm = GRID_SIZE_MM; mm < wMm; mm += GRID_SIZE_MM) {
       const x = (WORK_AREA_LEFT + Math.round(mm * PX_PER_MM)) * z;
       ctx.beginPath();
       ctx.moveTo(x, WORK_AREA_TOP * z);
-      ctx.lineTo(x, (WORK_AREA_TOP + STAMP_H_PX) * z);
+      ctx.lineTo(x, (WORK_AREA_TOP + heightPx) * z);
       ctx.stroke();
     }
-    for (let mm = GRID_SIZE_MM; mm < STAMP_H_MM; mm += GRID_SIZE_MM) {
+    for (let mm = GRID_SIZE_MM; mm < hMm; mm += GRID_SIZE_MM) {
       const y = (WORK_AREA_TOP + Math.round(mm * PX_PER_MM)) * z;
       ctx.beginPath();
       ctx.moveTo(WORK_AREA_LEFT * z, y);
-      ctx.lineTo((WORK_AREA_LEFT + STAMP_W_PX) * z, y);
+      ctx.lineTo((WORK_AREA_LEFT + widthPx) * z, y);
       ctx.stroke();
     }
     ctx.restore();
@@ -309,8 +409,8 @@ export function drawRulersAndGrid(
   const rSize = RULER_SIZE * z;
   const waLeft = WORK_AREA_LEFT * z;
   const waTop = WORK_AREA_TOP * z;
-  const totalW = CANVAS_TOTAL_W * z;
-  const totalH = CANVAS_TOTAL_H * z;
+  const totalW = canvasTotalW * z;
+  const totalH = canvasTotalH * z;
 
   // Tło linijek
   ctx.fillStyle = rulerBg;
@@ -326,7 +426,7 @@ export function drawRulersAndGrid(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
 
-  for (let mm = 0; mm <= STAMP_W_MM; mm++) {
+  for (let mm = 0; mm <= wMm; mm++) {
     const x = waLeft + Math.round(mm * PX_PER_MM * z);
     const isMajor = mm % 10 === 0;
     const isMid = mm % 5 === 0;
@@ -347,7 +447,7 @@ export function drawRulersAndGrid(
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
 
-  for (let mm = 0; mm <= STAMP_H_MM; mm++) {
+  for (let mm = 0; mm <= hMm; mm++) {
     const y = waTop + Math.round(mm * PX_PER_MM * z);
     const isMajor = mm % 10 === 0;
     const isMid = mm % 5 === 0;
@@ -423,9 +523,14 @@ export function addText(canvas: fabric.Canvas, options: AddTextOptions = {}) {
     charSpacing = 0,
   } = options;
 
+  /* OBLICZANIE ŚRODKA ZROBIONE DYNAMICZNIE */
+  const wMm = (canvas as any)?.__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
+  const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
   const itext = new fabric.IText(text, {
-    left: WORK_AREA_LEFT + STAMP_W_PX / 2,
-    top: WORK_AREA_TOP + STAMP_H_PX / 2,
+    left: WORK_AREA_LEFT + widthPx / 2,
+    top: WORK_AREA_TOP + heightPx / 2,
     fontFamily,
     fontSize: ptToPx(fontSize),
     fill,
@@ -460,14 +565,18 @@ export function addRectFrame(canvas: fabric.Canvas, options: AddFrameOptions = {
     margin_mm = 2,
   } = options;
 
+  const wMm = (canvas as any)?.__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
+  const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
   const marginPx = margin_mm * PX_PER_MM;
   const strokePx = strokeWidth_mm * PX_PER_MM;
 
   const rect = new fabric.Rect({
     left: WORK_AREA_LEFT + marginPx,
     top: WORK_AREA_TOP + marginPx,
-    width: STAMP_W_PX - marginPx * 2 - strokePx,
-    height: STAMP_H_PX - marginPx * 2 - strokePx,
+    width: widthPx - marginPx * 2 - strokePx,
+    height: heightPx - marginPx * 2 - strokePx,
     fill: 'transparent',
     stroke,
     strokeWidth: strokePx,
@@ -611,16 +720,20 @@ export function alignObject(
   let left: number;
   let top: number;
 
+  const wMm = (canvas as any)?.__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
+  const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
   // Horizontal
   switch (horizontal) {
     case 'left':
       left = safeMinX() + dL;
       break;
     case 'center':
-      left = WORK_AREA_LEFT + STAMP_W_PX / 2 - b.width / 2 + dL;
+      left = WORK_AREA_LEFT + widthPx / 2 - b.width / 2 + dL;
       break;
     case 'right':
-      left = safeMaxX() - b.width + dL;
+      left = safeMaxX(canvas) - b.width + dL;
       break;
   }
 
@@ -630,10 +743,10 @@ export function alignObject(
       top = safeMinY() + dT;
       break;
     case 'middle':
-      top = WORK_AREA_TOP + STAMP_H_PX / 2 - b.height / 2 + dT;
+      top = WORK_AREA_TOP + heightPx / 2 - b.height / 2 + dT;
       break;
     case 'bottom':
-      top = safeMaxY() - b.height + dT;
+      top = safeMaxY(canvas) - b.height + dT;
       break;
   }
 

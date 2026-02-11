@@ -2,13 +2,14 @@ import * as fabric from 'fabric';
 import { PDFDocument, rgb, degrees, StandardFonts, pushGraphicsState, popGraphicsState, concatTransformationMatrix } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import {
-    STAMP_W_MM,
-    STAMP_H_MM,
-    STAMP_W_PX,
-    STAMP_H_PX,
+    STAMP_SIZES,
+    DEFAULT_SIZE,
+    StampSize,
     WORK_AREA_LEFT,
     WORK_AREA_TOP,
-    pxToPt as canvasPxToPt
+    getCanvasDimensions,
+    pxToPt as canvasPxToPt,
+    PX_PER_MM
 } from './canvas-logic';
 
 // Helpery
@@ -57,8 +58,11 @@ export async function exportPDF(canvas: fabric.Canvas): Promise<Blob> {
     const pdfDoc = await PDFDocument.create();
     pdfDoc.registerFontkit(fontkit);
 
-    const pageW = STAMP_W_MM * MM_TO_PT;
-    const pageH = STAMP_H_MM * MM_TO_PT;
+    const wMm = (canvas as any).__stampWidthMm || DEFAULT_SIZE.widthMm;
+    const hMm = (canvas as any).__stampHeightMm || DEFAULT_SIZE.heightMm;
+
+    const pageW = wMm * MM_TO_PT;
+    const pageH = hMm * MM_TO_PT;
     const page = pdfDoc.addPage([pageW, pageH]);
 
     const objects = getUserObjects(canvas);
@@ -108,8 +112,12 @@ export async function exportPDF(canvas: fabric.Canvas): Promise<Blob> {
 export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
     const pdfDoc = await PDFDocument.create();
 
-    const pageW = STAMP_W_MM * MM_TO_PT;
-    const pageH = STAMP_H_MM * MM_TO_PT;
+    const wMm = (canvas as any).__stampWidthMm || DEFAULT_SIZE.widthMm;
+    const hMm = (canvas as any).__stampHeightMm || DEFAULT_SIZE.heightMm;
+    const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
+    const pageW = wMm * MM_TO_PT;
+    const pageH = hMm * MM_TO_PT;
     const page = pdfDoc.addPage([pageW, pageH]);
 
     // 1. Zapisz stan widoku (viewport)
@@ -139,8 +147,8 @@ export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
     // 3. Rasteryzacja canvas w SUPER wysokiej rozdzielczości (1000 DPI)
     // 1000 DPI: STAMP_W_MM * (1000/25.4) px ≈ 2362 px szerokości
     const targetDPI = 1000;
-    const targetWidthPx = Math.round(STAMP_W_MM * (targetDPI / 25.4));
-    const multiplier = targetWidthPx / STAMP_W_PX;
+    const targetWidthPx = Math.round(wMm * (targetDPI / 25.4));
+    const multiplier = targetWidthPx / widthPx;
 
     // Ustaw viewport na 1:1, aby zrzut był poprawny (czasem multiplier wariuje przy zoomie)
     canvas.setViewportTransform([1, 0, 0, 1, 0, 0]);
@@ -150,8 +158,8 @@ export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
         multiplier,
         left: WORK_AREA_LEFT,
         top: WORK_AREA_TOP,
-        width: STAMP_W_PX,
-        height: STAMP_H_PX,
+        width: widthPx,
+        height: heightPx,
     });
 
     // 4. Przywróć stan (widoczność i viewport)
@@ -194,13 +202,13 @@ export async function exportPDFFlattened(canvas: fabric.Canvas): Promise<Blob> {
 
 // --- UI Wrappers (Download) ---
 
-export async function downloadPDF(canvas: fabric.Canvas) {
+export async function downloadPDF(canvas: fabric.Canvas, size: StampSize) {
     try {
         const blob = await exportPDF(canvas);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'pieczatka.pdf';
+        a.download = `pieczatka_${size.widthMm}x${size.heightMm}.pdf`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

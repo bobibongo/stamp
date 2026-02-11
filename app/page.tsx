@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import * as fabric from 'fabric';
 import { Layers, SlidersHorizontal } from 'lucide-react';
@@ -8,7 +8,7 @@ import Toolbar from '@/components/editor/Toolbar';
 import PropertiesPanel from '@/components/editor/PropertiesPanel';
 import LayersPanel from '@/components/editor/LayersPanel';
 import { useIsMobile } from '@/lib/useIsMobile';
-import { undo, redo } from '@/lib/canvas-logic';
+import { undo, redo, STAMP_SIZES, DEFAULT_SIZE, StampSize } from '@/lib/canvas-logic';
 
 // Fabric.js wymaga dostępu do DOM – ładujemy dynamicznie (SSR off)
 const StampCanvas = dynamic(() => import('@/components/editor/StampCanvas'), {
@@ -29,6 +29,7 @@ export default function Home() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showGrid, setShowGrid] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
+  const [stampSize, setStampSize] = useState<StampSize>(DEFAULT_SIZE);
   const [activeMobilePanel, setActiveMobilePanel] = useState<MobilePanel>(null);
 
   const isMobile = useIsMobile();
@@ -98,6 +99,8 @@ export default function Home() {
         isMobile={isMobile}
         onUndo={handleUndo}
         onRedo={handleRedo}
+        activeSize={stampSize}
+        onSizeChange={setStampSize}
       />
 
       <div className="flex flex-1 overflow-hidden relative">
@@ -125,6 +128,7 @@ export default function Home() {
           showGrid={showGrid}
           snapToGrid={snapToGrid}
           isMobile={isMobile}
+          stampSize={stampSize}
         />
 
         {/* Panel właściwości – prawy (desktop) */}
