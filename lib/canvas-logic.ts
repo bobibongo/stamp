@@ -39,7 +39,7 @@ export const SAFETY_MARGIN_MM = 1;
 export const SAFETY_MARGIN_PX = Math.round(SAFETY_MARGIN_MM * PX_PER_MM);
 
 // Siatka
-export const GRID_SIZE_MM = 5;
+export const GRID_SIZE_MM = 1;
 export const GRID_SIZE_PX = Math.round(GRID_SIZE_MM * PX_PER_MM);
 
 // Snap rotation angles
@@ -63,8 +63,12 @@ let _frameCounter = 0;
 
 // ── Dostępne czcionki ─────────────────────────────────────
 export const AVAILABLE_FONTS = [
-  'Arimo',        // zamiennik Arial (Apache 2.0, metryczny odpowiednik)
-  'Tinos',        // zamiennik Times New Roman (Apache 2.0, metryczny odpowiednik)
+  'Arial',
+  'Arial Narrow',
+  'Times New Roman',
+  'Calibri',
+  'Myriad Pro',
+  'Myriad Pro Condensed',
   'Roboto',
   'Montserrat',
   'Inter',
@@ -246,24 +250,83 @@ const getDim = (canvas?: fabric.Canvas) => {
   };
 };
 
-const safeW = (canvas?: fabric.Canvas) => {
-  const { wPx } = getDim(canvas);
-  return wPx - SAFETY_MARGIN_PX * 2;
-};
-const safeH = (canvas?: fabric.Canvas) => {
-  const { hPx } = getDim(canvas);
-  return hPx - SAFETY_MARGIN_PX * 2;
+// ── Granice z marginesem 1cm (zamiast sztywnego cięcia) ──
+// Margines dodatkowy (poza obszar roboczy) na linijki itp.
+const EXTRA_MARGIN_PX = Math.round(10 * PX_PER_MM); // 10mm = 1cm
+
+// Tryby granic
+export type BoundaryMode = 'safety' | 'print' | 'unlocked';
+
+// Funkcja do ustawiania trybu w canvasie (przechowujemy w instancji)
+export function setBoundaryMode(canvas: fabric.Canvas, mode: BoundaryMode) {
+  (canvas as any).__boundaryMode = mode;
+  // Przelicz pozycje wszystkich obiektów
+  canvas.getObjects().forEach(obj => clampPosition(obj));
+  canvas.renderAll();
+}
+
+const getBoundaryMode = (canvas?: fabric.Canvas): BoundaryMode => {
+  return (canvas as any)?.__boundaryMode || 'safety';
 };
 
-const safeMinX = () => WORK_AREA_LEFT + SAFETY_MARGIN_PX;
-const safeMinY = () => WORK_AREA_TOP + SAFETY_MARGIN_PX;
-const safeMaxX = (canvas?: fabric.Canvas) => {
+const safeW = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
   const { wPx } = getDim(canvas);
-  return WORK_AREA_LEFT + wPx - SAFETY_MARGIN_PX;
+  const mode = modeOverride || getBoundaryMode(canvas);
+
+  switch (mode) {
+    case 'safety': return wPx - SAFETY_MARGIN_PX * 2;
+    case 'print': return wPx;
+    case 'unlocked': return wPx + EXTRA_MARGIN_PX * 2;
+  }
 };
-const safeMaxY = (canvas?: fabric.Canvas) => {
+
+const safeH = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
   const { hPx } = getDim(canvas);
-  return WORK_AREA_TOP + hPx - SAFETY_MARGIN_PX;
+  const mode = modeOverride || getBoundaryMode(canvas);
+
+  switch (mode) {
+    case 'safety': return hPx - SAFETY_MARGIN_PX * 2;
+    case 'print': return hPx;
+    case 'unlocked': return hPx + EXTRA_MARGIN_PX * 2;
+  }
+};
+
+const safeMinX = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
+  const mode = modeOverride || getBoundaryMode(canvas);
+  switch (mode) {
+    case 'safety': return WORK_AREA_LEFT + SAFETY_MARGIN_PX;
+    case 'print': return WORK_AREA_LEFT;
+    case 'unlocked': return WORK_AREA_LEFT - EXTRA_MARGIN_PX;
+  }
+};
+
+const safeMinY = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
+  const mode = modeOverride || getBoundaryMode(canvas);
+  switch (mode) {
+    case 'safety': return WORK_AREA_TOP + SAFETY_MARGIN_PX;
+    case 'print': return WORK_AREA_TOP;
+    case 'unlocked': return WORK_AREA_TOP - EXTRA_MARGIN_PX;
+  }
+};
+
+const safeMaxX = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
+  const { wPx } = getDim(canvas);
+  const mode = modeOverride || getBoundaryMode(canvas);
+  switch (mode) {
+    case 'safety': return WORK_AREA_LEFT + wPx - SAFETY_MARGIN_PX;
+    case 'print': return WORK_AREA_LEFT + wPx;
+    case 'unlocked': return WORK_AREA_LEFT + wPx + EXTRA_MARGIN_PX;
+  }
+};
+
+const safeMaxY = (canvas?: fabric.Canvas, modeOverride?: BoundaryMode) => {
+  const { hPx } = getDim(canvas);
+  const mode = modeOverride || getBoundaryMode(canvas);
+  switch (mode) {
+    case 'safety': return WORK_AREA_TOP + hPx - SAFETY_MARGIN_PX;
+    case 'print': return WORK_AREA_TOP + hPx;
+    case 'unlocked': return WORK_AREA_TOP + hPx + EXTRA_MARGIN_PX;
+  }
 };
 
 // ── Hard boundary – pozycja ───────────────────────────────
@@ -277,24 +340,32 @@ export function clampPosition(obj: fabric.FabricObject | undefined) {
   const dL = obj.left! - b.left;
   const dT = obj.top! - b.top;
 
+  const canvas = obj.canvas as fabric.Canvas;
+  const currentSafeW = safeW(canvas);
+  const currentSafeH = safeH(canvas);
+  const currentMinX = safeMinX(canvas);
+  const currentMinY = safeMinY(canvas);
+  const currentMaxX = safeMaxX(canvas);
+  const currentMaxY = safeMaxY(canvas);
+
   let left: number;
   let top: number;
 
-  if (b.width >= safeW(obj.canvas as fabric.Canvas)) {
+  if (b.width >= currentSafeW) {
     // Obiekt szerszy niż safe zone → przypnij do lewej
-    left = safeMinX() + dL;
+    left = currentMinX + dL;
   } else {
-    // Clamp: left nie mniejszy niż min, ale też bRight nie większy niż max
-    const minLeft = safeMinX() + dL;
-    const maxLeft = safeMaxX(obj.canvas as fabric.Canvas) - b.width + dL;
+    // Clamp
+    const minLeft = currentMinX + dL;
+    const maxLeft = currentMaxX - b.width + dL;
     left = Math.max(minLeft, Math.min(maxLeft, obj.left!));
   }
 
-  if (b.height >= safeH(obj.canvas as fabric.Canvas)) {
-    top = safeMinY() + dT;
+  if (b.height >= currentSafeH) {
+    top = currentMinY + dT;
   } else {
-    const minTop = safeMinY() + dT;
-    const maxTop = safeMaxY(obj.canvas as fabric.Canvas) - b.height + dT;
+    const minTop = currentMinY + dT;
+    const maxTop = currentMaxY - b.height + dT;
     top = Math.max(minTop, Math.min(maxTop, obj.top!));
   }
 
@@ -305,21 +376,22 @@ export function clampPosition(obj: fabric.FabricObject | undefined) {
 // ── Hard boundary – skalowanie ────────────────────────────
 // Podczas skalowania ograniczamy scaleX/scaleY tak, by obiekt
 // nie przekroczył granic safety zone.
-function clampScaling(obj: fabric.FabricObject | undefined) {
+export function clampScaling(obj: fabric.FabricObject | undefined) {
   if (!obj || (obj as any).__systemObject || (obj as any).__locked) return;
 
   obj.setCoords();
   const b = obj.getBoundingRect();
+  const canvas = obj.canvas as fabric.Canvas;
+  const currentSafeW = safeW(canvas);
+  const currentSafeH = safeH(canvas);
 
   // IText: per-axis clamping – każda oś niezależnie
   if (obj.type === 'i-text') {
     let sx = obj.scaleX || 1;
     let sy = obj.scaleY || 1;
-    const sw = safeW(obj.canvas as fabric.Canvas);
-    const sh = safeH(obj.canvas as fabric.Canvas);
 
-    if (b.width > sw) sx *= sw / b.width;
-    if (b.height > sh) sy *= sh / b.height;
+    if (b.width > currentSafeW) sx *= currentSafeW / b.width;
+    if (b.height > currentSafeH) sy *= currentSafeH / b.height;
     obj.set({ scaleX: sx, scaleY: sy });
     obj.setCoords();
     clampPosition(obj);
@@ -327,12 +399,9 @@ function clampScaling(obj: fabric.FabricObject | undefined) {
   }
 
   // Inne obiekty (ramki itp.): uniform clamping
-  const sw = safeW(obj.canvas as fabric.Canvas);
-  const sh = safeH(obj.canvas as fabric.Canvas);
-
-  if (b.width > sw || b.height > sh) {
-    const ratioW = sw / b.width;
-    const ratioH = sh / b.height;
+  if (b.width > currentSafeW || b.height > currentSafeH) {
+    const ratioW = currentSafeW / b.width;
+    const ratioH = currentSafeH / b.height;
     const ratio = Math.min(ratioW, ratioH, 1);
     if (ratio < 1) {
       obj.set({
@@ -725,28 +794,33 @@ export function alignObject(
   const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
 
   // Horizontal
+  // Zawsze używamy 'safety' mode dla automatycznego wyrównania/dopasowania
+  const safeMode = 'safety';
+  const cCanvas = canvas as fabric.Canvas;
+
   switch (horizontal) {
     case 'left':
-      left = safeMinX() + dL;
+      left = safeMinX(cCanvas, safeMode) + dL;
       break;
     case 'center':
+      // Center relative to white area center is usually fine, but let's be strict about limits
       left = WORK_AREA_LEFT + widthPx / 2 - b.width / 2 + dL;
       break;
     case 'right':
-      left = safeMaxX(canvas) - b.width + dL;
+      left = safeMaxX(cCanvas, safeMode) - b.width + dL;
       break;
   }
 
   // Vertical
   switch (vertical) {
     case 'top':
-      top = safeMinY() + dT;
+      top = safeMinY(cCanvas, safeMode) + dT;
       break;
     case 'middle':
       top = WORK_AREA_TOP + heightPx / 2 - b.height / 2 + dT;
       break;
     case 'bottom':
-      top = safeMaxY(canvas) - b.height + dT;
+      top = safeMaxY(cCanvas, safeMode) - b.height + dT;
       break;
   }
 
@@ -788,6 +862,127 @@ export function sendToBack(canvas: fabric.Canvas, obj: fabric.FabricObject) {
   if (idx < systemCount) {
     canvas.moveObjectTo(obj, systemCount);
   }
+  canvas.renderAll();
+}
+
+// ── Dopasuj obiekt do rozmiaru pieczątki (contain) ────────
+export function fitObjectToCanvas(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  obj.setCoords();
+  const b = obj.getBoundingRect();
+
+  // Reset scale first to calculate raw dimensions
+  const initialScaleX = obj.scaleX || 1;
+  const initialScaleY = obj.scaleY || 1;
+  const rawW = b.width / initialScaleX;
+  const rawH = b.height / initialScaleY;
+
+  const wMm = (canvas as any)?.__stampWidthMm || DEFAULT_SIZE.widthMm;
+  const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
+  const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
+  // Fit to Safety Margin (always)
+  const safeWVal = safeW(canvas, 'safety');
+  const safeHVal = safeH(canvas, 'safety');
+
+  const scaleX = safeWVal / rawW;
+  const scaleY = safeHVal / rawH;
+
+  // Użyj mniejszej skali, aby obiekt zmieścił się w całości (contain)
+  const scale = Math.min(scaleX, scaleY);
+
+  const centerX = WORK_AREA_LEFT + widthPx / 2;
+  const centerY = WORK_AREA_TOP + heightPx / 2;
+
+  obj.set({
+    scaleX: scale,
+    scaleY: scale,
+    // Jeśli origin jest 'center', to left/top to jest środek.
+    // Jeśli origin jest 'left'/'top', to trzeba przesunąć o połowę szerokości/wysokości.
+    left: obj.originX === 'center' ? centerX : centerX - (rawW * scale) / 2,
+    top: obj.originY === 'center' ? centerY : centerY - (rawH * scale) / 2,
+  });
+
+  obj.setCoords();
+  canvas.renderAll();
+}
+
+// ── Rozdziel tekst na linie (każda linia jako osobny obiekt)
+export function splitTextByLines(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  if (obj.type !== 'i-text') return;
+  const t = obj as fabric.IText;
+  const textLines = t.text?.split('\n') || [];
+
+  // Jeśli tylko jedna linia - nie ma co dzielić
+  if (textLines.length <= 1) return;
+
+  // Obliczamy pozycję Top-Left oryginalnego obiektu, niezależnie od origin, aby uniknąć przesunięć
+  const topLeft = t.getPointByOrigin('left', 'top');
+  const rootTop = topLeft.y;
+  const rootLeft = topLeft.x;
+
+  // Przybliżona wysokość linii (w zależności od font size i line height)
+  const computedLineHeight = t.fontSize! * (t.lineHeight ?? 1.16) * (t.scaleY || 1);
+  const styles = t.styles || {};
+
+  // Usuwamy oryginał
+  canvas.remove(t);
+
+  textLines.forEach((line, i) => {
+    // Tworzymy nowy obiekt IText dla każdej linii
+    const newStyles = styles[i] ? { 0: styles[i] } : {};
+
+    // Pobieramy właściwości i usuwamy te, które mogą powodować konflikty w konstruktorze
+    const options: any = (t as any).toObject(['__stampType', '__stampName', '__locked', '__strokeWidth_mm', '__boundaryMode']);
+    delete options.type;
+    delete options.version;
+    // Usuwamy transformacje, bo ustawimy je ręcznie
+    delete options.top;
+    delete options.left;
+    delete options.angle;
+
+    // Obliczamy bazową pozycję Top-Left dla danej linii
+    let lineLeft = rootLeft;
+    let lineTop = rootTop + i * computedLineHeight;
+
+    // Jeśli był obrót, musimy przesunąć każdą kolejną linię wzdłuż obróconej osi Y
+    if (t.angle && t.angle !== 0) {
+      const angleRad = fabric.util.degreesToRadians(t.angle);
+      const dist = i * computedLineHeight;
+      // Przesunięcie wektora (0, dist) o kąt obrotu
+      const offsetX = -Math.sin(angleRad) * dist;
+      const offsetY = Math.cos(angleRad) * dist;
+      lineLeft += offsetX;
+      lineTop += offsetY;
+    }
+
+    const newObj = new fabric.IText(line, {
+      ...options,
+      text: line,
+      top: lineTop,
+      left: lineLeft,
+      originX: 'left', // Wymuszamy origin 'left'/'top' dla spójności
+      originY: 'top',
+      styles: newStyles as any,
+      scaleX: t.scaleX,
+      scaleY: t.scaleY,
+      fill: t.fill,
+      fontFamily: t.fontFamily,
+      fontSize: t.fontSize,
+      charSpacing: t.charSpacing,
+      textAlign: 'left', // Resetujemy align, bo teraz to jest jedna linia
+      fontWeight: t.fontWeight,
+      fontStyle: t.fontStyle,
+      underline: t.underline,
+      angle: t.angle, // Aplikujemy kąt
+    });
+
+    // Aktualizuj nazwę
+    (newObj as any).__stampName = `${(t as any).__stampName || 'Tekst'} (linia ${i + 1})`;
+
+    canvas.add(newObj);
+  });
+
+  canvas.discardActiveObject();
   canvas.renderAll();
 }
 

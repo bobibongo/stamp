@@ -151,9 +151,10 @@ export default function LayersPanel({
                         {/* Name (editable on double-click) */}
                         <input
                             type="text"
-                            className={`flex-1 min-w-0 text-xs bg-transparent outline-none truncate ${dark ? 'text-zinc-200' : 'text-zinc-700'
+                            className={`flex-1 min-w-0 text-xs font-semibold bg-transparent outline-none truncate ${dark ? 'text-zinc-100 placeholder-zinc-500' : 'text-zinc-800 placeholder-zinc-400'
                                 }`}
                             value={name}
+                            placeholder="Obiekt"
                             onChange={(e) => handleRename(obj, e.target.value)}
                             onClick={(e) => e.stopPropagation()}
                             onDoubleClick={(e) => (e.target as HTMLInputElement).select()}
@@ -254,7 +255,7 @@ export default function LayersPanel({
     // ── Desktop: Sidebar ────────────────────────────────
     return (
         <div
-            className={`w-56 border-l flex flex-col overflow-hidden transition-colors duration-300 ${dark ? 'bg-zinc-900 border-zinc-700' : 'bg-white border-zinc-200'
+            className={`w-96 border-l flex flex-col overflow-hidden transition-colors duration-300 ${dark ? 'bg-zinc-900 border-zinc-700' : 'bg-white border-zinc-200'
                 }`}
         >
             {/* Header */}

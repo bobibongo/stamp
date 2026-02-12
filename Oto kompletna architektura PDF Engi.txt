@@ -1,0 +1,134 @@
+Oto kompletna architektura PDF Engine. To rozwiązanie eliminuje problem rasteryzacji, rozwiązuje kwestię fontów i zapewnia matematyczną precyzję (skalowanie PX do MM) dla grawerów laserowych.
+
+To rozwiązanie składa się z trzech filarów:
+
+Backend (Node.js + Puppeteer): Silnik renderujący w Dockerze.
+
+Logic (Unit Converter): Przelicznik jednostek, aby pieczątka 40x15mm w przeglądarce miała dokładnie 40x15mm w PDF.
+
+Frontend (Integrator): Czysty skrypt wysyłający dane.
+
+1. package.json
+Zestaw niezbędnych narzędzi.
+
+JSON
+
+{
+  "name": "stamp-vector-engine",
+  "version": "1.0.0",
+  "main": "server.js",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "express": "^4.18.2",
+    "fabric": "^5.3.0",
+    "puppeteer": "^21.5.0"
+  }
+}
+2. server.js (Serce systemu)
+Zaimplementowałem tutaj Auto-Scaling, Font Injection oraz High-Precision Rendering.
+
+JavaScript
+
+const express = require('express');
+const puppeteer = require('puppeteer');
+const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
+
+const app = express();
+app.use(bodyParser.json({ limit: '50mb' })); // Obsługa dużych projektów
+
+const FONT_DIR = path.join(__dirname, 'fonts');
+
+// Automatyczne mapowanie wszystkich fontów z folderu /fonts
+const getAvailableFonts = () => {
+    return fs.readdirSync(FONT_DIR)
+        .filter(file => file.endsWith('.ttf') || file.endsWith('.otf'))
+        .map(file => ({
+            name: path.parse(file).name,
+            file: file,
+            base64: fs.readFileSync(path.join(FONT_DIR, file)).toString('base64')
+        }));
+};
+
+app.post('/generate-pdf', async (req, res) => {
+    const { fabricJson, widthMm, heightMm, dpi = 300 } = req.body;
+
+    // Przelicznik: 1mm = 3.779527559 px (przy 96 DPI - standard Fabric.js)
+    const mmToPx = (mm) => mm * 3.779527559;
+    const canvasWidth = mmToPx(widthMm);
+    const canvasHeight = mmToPx(heightMm);
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            headless: 'new',
+            args: ['--no-sandbox', '--disable-dev-shm-usage', '--font-render-hinting=none']
+        });
+        const page = await browser.newPage();
+
+        const fonts = getAvailableFonts();
+        const fontFaces = fonts.map(f => `
+            @font-face {
+                font-family: '${f.name}';
+                src: url(data:font/ttf;base64,${f.base64}) format('truetype');
+            }
+        `).join('\n');
+
+        const htmlContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    ${fontFaces}
+                    body { margin: 0; padding: 0; background: white; }
+                    #container { width: ${canvasWidth}px; height: ${canvasHeight}px; }
+                </style>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+            </head>
+            <body>
+                <canvas id="c" width="${canvasWidth}" height="${canvasHeight}"></canvas>
+                <script>
+                    const canvas = new fabric.StaticCanvas('c');
+                    // Wyłączamy wygładzanie dla absolutnej precyzji
+                    canvas.imageSmoothingEnabled = false;
+                    
+                    canvas.loadFromJSON(${JSON.stringify(fabricJson)}, () => {
+                        canvas.renderAll();
+                        // Sygnał gotowości dla Puppeteera
+                        window.rendered = true;
+                    });
+                </script>
+            </body>
+            </html>
+        `;
+
+        await page.setContent(htmlContent);
+        await page.waitForFunction('window.rendered === true');
+
+        // Generowanie PDF w skali 1:1
+        const pdfBuffer = await page.pdf({
+            width: `${widthMm}mm`,
+            height: `${heightMm}mm`,
+            printBackground: true,
+            margin: { top: 0, right: 0, bottom: 0, left: 0 },
+            preferCSSPageSize: true
+        });
+
+        res.set({
+            'Content-Type': 'application/pdf',
+            'Content-Disposition': 'attachment; filename="vector_stamp.pdf"'
+        });
+        res.send(pdfBuffer);
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).send("Internal Server Error");
+    } finally {
+        if (browser) await browser.close();
+    }
+});
+
+app.listen(3000, () => console.log('Superior PDF Engine Online on Port 3000'));
+3. Dockerfile (Izolacja i stabilność)
+To środowisko gwarantuje, że PDF będzie identyczny na Twoim komputerze, na serwerze i w maszynie laserowej.

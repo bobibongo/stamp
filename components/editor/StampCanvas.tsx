@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import * as fabric from 'fabric';
-import { ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize, Lock, Unlock, Printer } from 'lucide-react';
 import {
     initCanvas,
     deleteSelected,
@@ -16,6 +16,9 @@ import {
     StampSize,
     PX_PER_MM,
     getCanvasDimensions,
+    BoundaryMode,
+    setBoundaryMode,
+    clampScaling,
 } from '@/lib/canvas-logic';
 
 interface StampCanvasProps {
@@ -30,7 +33,7 @@ interface StampCanvasProps {
 }
 
 const ZOOM_MIN = 0.3;
-const ZOOM_MAX = 4;
+const ZOOM_MAX = 5;
 const ZOOM_STEP = 0.25;
 
 export default function StampCanvas({
@@ -49,6 +52,7 @@ export default function StampCanvas({
     const themeRef = useRef(theme);
     const showGridRef = useRef(showGrid);
     const [zoom, setZoom] = useState(1);
+    const [boundaryMode, setBoundaryModeState] = useState<BoundaryMode>('safety');
 
     themeRef.current = theme;
     showGridRef.current = showGrid;
@@ -56,6 +60,21 @@ export default function StampCanvas({
     const handleSelection = useCallback(
         (e: any) => {
             const activeObj = e.selected?.[0] ?? null;
+
+            // Force visual styles on selection
+            if (activeObj) {
+                activeObj.set({
+                    transparentCorners: false,
+                    cornerColor: '#ffffff',
+                    cornerStrokeColor: '#6366f1',
+                    borderColor: '#6366f1',
+                    cornerSize: 10,
+                    padding: 5,
+                    cornerStyle: 'circle',
+                    borderDashArray: [4, 4],
+                });
+            }
+
             onSelectionChange(activeObj);
         },
         [onSelectionChange]
@@ -78,11 +97,33 @@ export default function StampCanvas({
         const canvas = initCanvas(canvasRef.current, stampSize);
         fabricRef.current = canvas;
 
+        // Visual Polish - Selection Handles
+        fabric.Object.prototype.set({
+            transparentCorners: false,
+            cornerColor: '#ffffff',
+            cornerStrokeColor: '#6366f1', // indigo-500
+            borderColor: '#6366f1',
+            cornerSize: 10,
+            padding: 5,
+            cornerStyle: 'circle',
+            borderDashArray: [4, 4],
+        });
+
+        const handleScaling = (e: any) => {
+            const obj = e.target;
+            if (obj) {
+                clampScaling(obj);
+                // Force render to show clamped state immediately
+                obj.canvas?.requestRenderAll();
+            }
+        };
+
         canvas.on('selection:created', handleSelection);
         canvas.on('selection:updated', handleSelection);
         canvas.on('selection:cleared', handleClear);
         canvas.on('object:modified', handleObjModified);
         canvas.on('text:changed', handleObjModified);
+        canvas.on('object:scaling', handleScaling); // Add scaling constraint
 
         // Zapisz stan początkowy dla undo
         saveState(canvas);
@@ -272,6 +313,14 @@ export default function StampCanvas({
         }
     };
 
+    const toggleBoundaryMode = () => {
+        const nextMode = boundaryMode === 'safety' ? 'print' : boundaryMode === 'print' ? 'unlocked' : 'safety';
+        setBoundaryModeState(nextMode);
+        if (fabricRef.current) {
+            setBoundaryMode(fabricRef.current, nextMode);
+        }
+    };
+
     const dark = theme === 'dark';
     const bgClass = dark ? 'bg-zinc-800' : 'bg-zinc-200';
     const zoomBtnClass = `flex items-center justify-center w-8 h-8 rounded-lg transition-colors cursor-pointer ${dark ? 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300' : 'bg-white hover:bg-zinc-100 text-zinc-600 shadow-sm'
@@ -286,6 +335,10 @@ export default function StampCanvas({
             {/* Zoom controls */}
             <div className={`flex items-center justify-center gap-2 py-2 border-b ${dark ? 'border-zinc-700/50' : 'border-zinc-300/50'
                 }`}>
+                <button onClick={() => setZoom(1)} className={zoomBtnClass} title="100%">
+                    <span className="text-[10px] font-bold">1:1</span>
+                </button>
+                <div className={`w-px h-4 mx-1 ${dark ? 'bg-zinc-700' : 'bg-zinc-300'}`} />
                 <button onClick={zoomOut} className={zoomBtnClass} title="Pomniejsz (Ctrl+scroll)">
                     <ZoomOut size={14} />
                 </button>
@@ -296,8 +349,9 @@ export default function StampCanvas({
                 <button onClick={zoomIn} className={zoomBtnClass} title="Powiększ (Ctrl+scroll)">
                     <ZoomIn size={14} />
                 </button>
-                <button onClick={zoomFit} className={zoomBtnClass} title="Dopasuj">
-                    <Maximize size={14} />
+                <div className={`w-px h-4 mx-1 ${dark ? 'bg-zinc-700' : 'bg-zinc-300'}`} />
+                <button onClick={() => setZoom(5)} className={zoomBtnClass} title="500%">
+                    <span className="text-[10px] font-bold">5:1</span>
                 </button>
             </div>
 
@@ -307,6 +361,28 @@ export default function StampCanvas({
                     <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs text-zinc-400 font-medium select-none whitespace-nowrap">
                         {stampSize.widthMm} × {stampSize.heightMm} mm
                     </div>
+
+                    {/* Boundary Toggle - Top Left Corner (Outside Canvas) */}
+                    <button
+                        onClick={toggleBoundaryMode}
+                        className={`absolute -top-8 -left-8 w-8 h-8 flex items-center justify-center rounded-lg shadow-sm transition-all z-10 ${dark ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-white hover:bg-zinc-50'
+                            }`}
+                        style={{
+                            color: boundaryMode === 'safety' ? '#ef4444' : // red-500
+                                boundaryMode === 'print' ? '#f97316' : // orange-500
+                                    '#22c55e' // green-500
+                        }}
+                        title={
+                            boundaryMode === 'safety' ? 'Zablokowane (Margines bezpieczeństwa)' :
+                                boundaryMode === 'print' ? 'Tryb Druku (Obszar zadruku)' :
+                                    'Odblokowane (Margines techniczny)'
+                        }
+                    >
+                        {boundaryMode === 'safety' && <Lock size={16} />}
+                        {boundaryMode === 'print' && <Printer size={16} />}
+                        {boundaryMode === 'unlocked' && <Unlock size={16} />}
+                    </button>
+
                     <canvas
                         ref={canvasRef}
                         // Wymiary początkowe (zostaną nadpisane przez fabric)
