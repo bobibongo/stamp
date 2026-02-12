@@ -39,32 +39,44 @@ function hexToRgb(hex: string) {
 // Struktura: Family -> { regular, bold, italic, boldItalic }
 const FONT_MAP: Record<string, { regular: string; bold?: string; italic?: string; boldItalic?: string }> = {
     'Arimo': {
-        regular: '/fonts/arimo/Arimo-Regular.ttf'
+        regular: '/fonts/arimo/static/Arimo-Regular.ttf',
+        bold: '/fonts/arimo/static/Arimo-Bold.ttf',
+        italic: '/fonts/arimo/static/Arimo-Italic.ttf',
+        boldItalic: '/fonts/arimo/static/Arimo-BoldItalic.ttf'
     },
     'Tinos': {
         regular: '/fonts/tinos/Tinos-Regular.ttf',
-        bold: '/fonts/tinos/Tinos-Bold.ttf'
+        bold: '/fonts/tinos/Tinos-Bold.ttf',
+        italic: '/fonts/tinos/Tinos-Italic.ttf',
+        boldItalic: '/fonts/tinos/Tinos-BoldItalic.ttf'
     },
     'Roboto': {
-        regular: '/fonts/roboto/Roboto-Regular.ttf'
+        regular: '/fonts/roboto/static/Roboto-Regular.ttf',
+        bold: '/fonts/roboto/static/Roboto-Bold.ttf',
+        italic: '/fonts/roboto/static/Roboto-Italic.ttf',
+        boldItalic: '/fonts/roboto/static/Roboto-BoldItalic.ttf'
     },
     'Montserrat': {
-        regular: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Regular.ttf',
-        bold: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Bold.ttf',
-        italic: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-Italic.ttf',
-        boldItalic: '/fonts/Inter,Montserrat/Montserrat/static/Montserrat-BoldItalic.ttf'
+        regular: '/fonts/Montserrat/static/Montserrat-Regular.ttf',
+        bold: '/fonts/Montserrat/static/Montserrat-Bold.ttf',
+        italic: '/fonts/Montserrat/static/Montserrat-Italic.ttf',
+        boldItalic: '/fonts/Montserrat/static/Montserrat-BoldItalic.ttf'
     },
     'Inter': {
-        regular: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Regular.ttf',
-        bold: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Bold.ttf',
-        italic: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-Italic.ttf',
-        boldItalic: '/fonts/Inter,Montserrat/Inter/static/Inter_18pt-BoldItalic.ttf'
+        regular: '/fonts/Inter/static/Inter_18pt-Regular.ttf',
+        bold: '/fonts/Inter/static/Inter_18pt-Bold.ttf',
+        italic: '/fonts/Inter/static/Inter_18pt-Italic.ttf',
+        boldItalic: '/fonts/Inter/static/Inter_18pt-BoldItalic.ttf'
     }
 };
 
 async function fetchFontBytes(url: string): Promise<ArrayBuffer> {
+    console.log(`Fetching font from: ${url}`);
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to load font: ${url}`);
+    if (!res.ok) {
+        console.error(`Status błędu fetch: ${res.status} ${res.statusText} dla URL: ${url}`);
+        throw new Error(`Failed to load font: ${url} (Status: ${res.status})`);
+    }
     return await res.arrayBuffer();
 }
 
@@ -116,12 +128,8 @@ export async function exportPDF(canvas: fabric.Canvas): Promise<Blob> {
             continue;
         }
 
-        // Próba znalezienia pliku dla wariantu
-        // Jeśli brak wariantu (np. brak bold), spróbuj regular
-        // Uwaga: PDF-lib nie robi "fake bold", więc jeśli brak pliku, będzie regular.
         let fontUrl = (mapping as any)[variant];
         if (!fontUrl) {
-            // Fallback logic
             if (variant === 'boldItalic') fontUrl = mapping.bold || mapping.italic || mapping.regular;
             else if (variant === 'bold') fontUrl = mapping.regular;
             else if (variant === 'italic') fontUrl = mapping.regular;
@@ -130,11 +138,16 @@ export async function exportPDF(canvas: fabric.Canvas): Promise<Blob> {
         if (!fontUrl) fontUrl = mapping.regular;
 
         try {
+            console.log(`Próba ładowania fontu: ${fontKey} z URL: ${fontUrl}`);
             const fontBytes = await fetchFontBytes(fontUrl);
-            const embedded = await pdfDoc.embedFont(fontBytes, { subset: false });
+            // Kopiowanie bufora, aby uniknąć problemów z fontkit (RangeError)
+            const fontBytesArray = new Uint8Array(fontBytes);
+            const fontBuffer = fontBytesArray.buffer.slice(0);
+            const embedded = await pdfDoc.embedFont(fontBuffer, { subset: false });
             embeddedFonts[fontKey] = embedded;
+            console.log(`Załadowano font: ${fontKey}`);
         } catch (e) {
-            console.error(`Błąd osadzania fontu "${fontKey}":`, e);
+            console.error(`Błąd osadzania fontu "${fontKey}" z URL "${fontUrl}":`, e);
             embeddedFonts[fontKey] = fallbackFont;
         }
     }
