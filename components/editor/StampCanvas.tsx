@@ -51,19 +51,26 @@ export default function StampCanvas({
     const wrapperRef = useRef<HTMLDivElement>(null);
     const themeRef = useRef(theme);
     const showGridRef = useRef(showGrid);
-    const [zoom, setZoom] = useState(1);
-    const [boundaryMode, setBoundaryModeState] = useState<BoundaryMode>('safety');
+    const [zoom, setZoom] = useState(2.5);
+    const [boundaryMode, setBoundaryModeState] = useState<BoundaryMode>('unlocked');
 
     themeRef.current = theme;
     showGridRef.current = showGrid;
 
     const handleSelection = useCallback(
         (e: any) => {
-            const activeObj = e.selected?.[0] ?? null;
+            const canvas = fabricRef.current;
+            if (!canvas) return;
 
-            // Force visual styles on selection
-            if (activeObj) {
-                activeObj.set({
+            const activeObj = canvas.getActiveObject();
+
+            // Force visual styles on selection objects
+            const objects = activeObj?.type === 'activeSelection'
+                ? (activeObj as fabric.ActiveSelection).getObjects()
+                : activeObj ? [activeObj] : [];
+
+            objects.forEach(obj => {
+                obj.set({
                     transparentCorners: false,
                     cornerColor: '#ffffff',
                     cornerStrokeColor: '#6366f1',
@@ -73,9 +80,9 @@ export default function StampCanvas({
                     cornerStyle: 'circle',
                     borderDashArray: [4, 4],
                 });
-            }
+            });
 
-            onSelectionChange(activeObj);
+            onSelectionChange(activeObj || null);
         },
         [onSelectionChange]
     );
@@ -96,6 +103,9 @@ export default function StampCanvas({
         // Inicjalizacja z początkowym rozmiarem
         const canvas = initCanvas(canvasRef.current, stampSize);
         fabricRef.current = canvas;
+
+        // Synchronizacja początkowego stanu kłódki (boundaryMode)
+        setBoundaryMode(canvas, boundaryMode);
 
         // Visual Polish - Selection Handles
         fabric.Object.prototype.set({

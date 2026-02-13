@@ -1,7 +1,7 @@
 import * as fabric from 'fabric';
 
 // ── Stałe przelicznikowe ──────────────────────────────────
-export const PX_PER_MM = 3.78;
+export const PX_PER_MM = 3.7795275591;
 
 export interface StampSize {
   widthMm: number;
@@ -24,8 +24,8 @@ export const WORK_AREA_LEFT = RULER_SIZE + CANVAS_PADDING;
 export const WORK_AREA_TOP = RULER_SIZE + CANVAS_PADDING;
 
 export function getCanvasDimensions(widthMm: number, heightMm: number) {
-  const wPx = Math.round(widthMm * PX_PER_MM);
-  const hPx = Math.round(heightMm * PX_PER_MM);
+  const wPx = widthMm * PX_PER_MM;
+  const hPx = heightMm * PX_PER_MM;
   return {
     widthPx: wPx,
     heightPx: hPx,
@@ -586,8 +586,8 @@ export function addText(canvas: fabric.Canvas, options: AddTextOptions = {}) {
   _textCounter++;
   const {
     text = 'Pieczątka',
-    fontFamily = 'Arimo',
-    fontSize = 12,  // pt (domyślnie 12pt jak w Word)
+    fontFamily = 'Myriad Pro',
+    fontSize = 10,  // pt (domyślnie 10pt jak w Word)
     fill = '#000000',
     charSpacing = 0,
   } = options;
@@ -597,9 +597,13 @@ export function addText(canvas: fabric.Canvas, options: AddTextOptions = {}) {
   const hMm = (canvas as any)?.__stampHeightMm || DEFAULT_SIZE.heightMm;
   const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
 
+  // Position: Center Horizontal, Top Vertical (with Safety Margin)
+  const left = WORK_AREA_LEFT + widthPx / 2;
+  const top = WORK_AREA_TOP + SAFETY_MARGIN_PX + ptToPx(fontSize) / 1.5;
+
   const itext = new fabric.IText(text, {
-    left: WORK_AREA_LEFT + widthPx / 2,
-    top: WORK_AREA_TOP + heightPx / 2,
+    left,
+    top,
     fontFamily,
     fontSize: ptToPx(fontSize),
     fill,
@@ -611,12 +615,91 @@ export function addText(canvas: fabric.Canvas, options: AddTextOptions = {}) {
   });
 
   (itext as any).__stampName = `Tekst ${_textCounter}`;
+  (itext as any).__uid = `text-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   canvas.add(itext);
   canvas.setActiveObject(itext);
   canvas.renderAll();
 
   return itext;
+}
+
+// ── Layer Operations ──────────────────────────────────────
+export async function duplicateActive(canvas: fabric.Canvas) {
+  const active = canvas.getActiveObject();
+  if (!active) return;
+
+  active.clone().then((cloned: fabric.FabricObject) => {
+    canvas.discardActiveObject();
+
+    // Offset new object
+    cloned.set({
+      left: (cloned.left || 0) + 10,
+      top: (cloned.top || 0) + 10,
+      evented: true,
+    });
+
+    if (active.type === 'activeSelection') {
+      // If multiple, clone preserves relative positions
+      cloned.canvas = canvas;
+      (cloned as any).forEachObject((obj: any) => {
+        canvas.add(obj);
+        if (obj.type === 'i-text') _textCounter++;
+        if ((obj as any).__stampType === 'frame') _frameCounter++;
+        // Append Copy to name
+        const name = (obj as any).__stampName || 'Obiekt';
+        (obj as any).__stampName = `${name} (Kopia)`;
+      });
+      cloned.setCoords();
+    } else {
+      if ((cloned as any).__systemObject) return; // Don't clone system objects
+
+      canvas.add(cloned);
+      if (cloned.type === 'i-text') {
+        _textCounter++;
+        (cloned as any).__stampName = `${(active as any).__stampName || 'Tekst'} (Kopia)`;
+      } else if ((cloned as any).__stampType === 'frame') {
+        _frameCounter++;
+        (cloned as any).__stampName = `${(active as any).__stampName || 'Ramka'} (Kopia)`;
+      } else {
+        (cloned as any).__stampName = `${(active as any).__stampName || 'Obiekt'} (Kopia)`;
+      }
+    }
+
+    canvas.setActiveObject(cloned);
+    canvas.renderAll();
+    saveState(canvas);
+  });
+}
+
+export function groupActive(canvas: fabric.Canvas) {
+  const active = canvas.getActiveObject();
+  if (!active || active.type !== 'activeSelection') return;
+
+  (active as any).toGroup().then((group: any) => {
+    if (group) {
+      canvas.setActiveObject(group);
+      canvas.requestRenderAll();
+      saveState(canvas);
+    }
+  }).catch((err: any) => {
+    console.error('Group error:', err);
+  });
+}
+
+export function ungroupActive(canvas: fabric.Canvas) {
+  const active = canvas.getActiveObject();
+  if (!active || active.type !== 'group') return;
+
+  (active as any).toActiveSelection().then((selection: any) => {
+    if (selection) {
+      canvas.setActiveObject(selection);
+      canvas.requestRenderAll();
+      saveState(canvas);
+    }
+  }).catch((err: any) => {
+    console.error('Ungroup error:', err);
+  });
 }
 
 // ── Dodawanie ramki prostokątnej ──────────────────────────
@@ -657,6 +740,7 @@ export function addRectFrame(canvas: fabric.Canvas, options: AddFrameOptions = {
   (rect as any).__stampType = 'frame';
   (rect as any).__strokeWidth_mm = strokeWidth_mm;
   (rect as any).__stampName = `Ramka ${_frameCounter}`;
+  (rect as any).__uid = `frame-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
   canvas.add(rect);
   canvas.setActiveObject(rect);
@@ -700,7 +784,7 @@ function getSerializableObjects(canvas: fabric.Canvas) {
 export function saveState(canvas: fabric.Canvas) {
   if (_ignoreStateChange) return;
   const objs = getSerializableObjects(canvas);
-  const state = JSON.stringify(objs.map((o) => o.toObject(['__stampType', '__stampName', '__strokeWidth_mm'])));
+  const state = JSON.stringify(objs.map((o) => o.toObject(['__stampType', '__stampName', '__strokeWidth_mm', '__uid'])));
   _undoStack.push(state);
   if (_undoStack.length > MAX_HISTORY) _undoStack.shift();
   _redoStack = []; // nowa akcja czyści redo
@@ -738,6 +822,7 @@ async function _restoreState(canvas: fabric.Canvas, stateJson: string) {
     if (objData.__stampType) (obj as any).__stampType = objData.__stampType;
     if (objData.__stampName) (obj as any).__stampName = objData.__stampName;
     if (objData.__strokeWidth_mm) (obj as any).__strokeWidth_mm = objData.__strokeWidth_mm;
+    if (objData.__uid) (obj as any).__uid = objData.__uid;
     canvas.add(obj);
   }
 

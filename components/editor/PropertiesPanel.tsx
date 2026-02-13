@@ -483,26 +483,6 @@ export default function PropertiesPanel({
 
                         <div className={sectionDivider} />
 
-                        {/* Warstwy */}
-                        <div>
-                            <label className={labelClass}>Kolejność warstw</label>
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={handleBringToFront}
-                                    className={`${actionBtn} flex-1`}
-                                    title="Przesuń na wierzch"
-                                >
-                                    <ArrowUpToLine size={16} /> <span className="text-xs ml-2">Na wierzch</span>
-                                </button>
-                                <button
-                                    onClick={handleSendToBack}
-                                    className={`${actionBtn} flex-1`}
-                                    title="Przesuń pod spód"
-                                >
-                                    <ArrowDownToLine size={16} /> <span className="text-xs ml-2">Pod spód</span>
-                                </button>
-                            </div>
-                        </div>
                     </div>
 
                     <div className={sectionCard}>

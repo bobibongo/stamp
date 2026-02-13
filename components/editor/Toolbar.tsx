@@ -4,7 +4,8 @@ import { useState } from 'react';
 import { Type, Square, Sun, Moon, Download, Grid3x3, Magnet, Menu, X, Undo2, Redo2, FileText, Image, ChevronDown, Ruler } from 'lucide-react';
 import * as fabric from 'fabric';
 import { addText, addRectFrame, saveState, STAMP_SIZES, StampSize } from '@/lib/canvas-logic';
-import { downloadPDF, downloadPDFFlattened } from '@/lib/export-logic';
+import { downloadPDF, downloadPDFFlattened, downloadPDFService } from '@/lib/export-logic';
+import PdfResizerModal from '../modals/PdfResizerModal';
 
 interface ToolbarProps {
     canvas: fabric.Canvas | null;
@@ -38,6 +39,7 @@ export default function Toolbar({
     const [menuOpen, setMenuOpen] = useState(false);
     const [sizeMenuOpen, setSizeMenuOpen] = useState(false);
     const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [pdfResizerOpen, setPdfResizerOpen] = useState(false);
 
     // Custom Size State
     const [customSizeModalOpen, setCustomSizeModalOpen] = useState(false);
@@ -70,6 +72,13 @@ export default function Toolbar({
         setExportMenuOpen(false);
         setMenuOpen(false);
         await downloadPDFFlattened(canvas);
+    };
+
+    const handleExportPDFService = async () => {
+        if (!canvas) return;
+        setExportMenuOpen(false);
+        setMenuOpen(false);
+        await downloadPDFService(canvas);
     };
 
 
@@ -362,7 +371,7 @@ export default function Toolbar({
                     <span className="text-sm font-medium">Ramka</span>
                 </button>
 
-                <div className={divider} />
+
 
                 <button
                     onClick={onToggleGrid}
@@ -378,6 +387,18 @@ export default function Toolbar({
                 >
                     <Magnet size={20} />
                 </button>
+
+                <div className={divider} />
+
+                {/* PDF Resizer Button */}
+                <button
+                    onClick={() => setPdfResizerOpen(true)}
+                    className={`${btnBase} ${btnIcon}`}
+                    title="Zmień rozmiar PDF (Narzędzie)"
+                >
+                    <Ruler size={20} className="text-emerald-500" />
+                </button>
+
                 <button onClick={onToggleTheme} className={btnIcon} title="Zmień motyw">
                     {dark ? <Sun size={20} /> : <Moon size={20} />}
                 </button>
@@ -401,6 +422,18 @@ export default function Toolbar({
                                 <div className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider ${dark ? 'text-zinc-500' : 'text-zinc-400'}`}>
                                     Wybierz format
                                 </div>
+                                <button
+                                    onClick={handleExportPDFService}
+                                    className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center ${dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50'
+                                        }`}
+                                >
+                                    <FileText size={16} className="mr-2 text-indigo-500" />
+                                    <div>
+                                        <div className="font-medium text-indigo-600 dark:text-indigo-400">PDF PRO (Silnik V2)</div>
+                                        <div className="text-xs opacity-60">Idealne wektory & fonty</div>
+                                    </div>
+                                </button>
+                                <div className="border-t my-1 border-zinc-200 dark:border-zinc-700"></div>
                                 <button
                                     onClick={handleExportPDF}
                                     className={`w-full text-left px-4 py-2 text-sm transition-colors flex items-center ${dark ? 'text-zinc-300 hover:bg-zinc-700' : 'text-zinc-700 hover:bg-zinc-50'
@@ -429,6 +462,7 @@ export default function Toolbar({
                 </div>
             </div>
             {CustomSizeModal}
+            <PdfResizerModal isOpen={pdfResizerOpen} onClose={() => setPdfResizerOpen(false)} darkMode={dark} />
         </div>
     );
 }

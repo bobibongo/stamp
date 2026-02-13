@@ -329,6 +329,119 @@ export async function downloadPDFFlattened(canvas: fabric.Canvas) {
     }
 }
 
+export async function downloadPDFService(canvas: fabric.Canvas) {
+    try {
+        const wMm = (canvas as any).__stampWidthMm || DEFAULT_SIZE.widthMm;
+        const hMm = (canvas as any).__stampHeightMm || DEFAULT_SIZE.heightMm;
+        const { widthPx, heightPx } = getCanvasDimensions(wMm, hMm);
+
+        console.log('Generating SVG for PDF Service...', { wMm, hMm, widthPx, heightPx });
+
+        // Przygotowanie SVG
+        // Wyłączamy selekcję i aktywne obiekty
+        canvas.discardActiveObject();
+        canvas.renderAll();
+
+        // Generujemy SVG tylko z obszaru roboczego
+        // Używamy viewBox aby wyciąć odpowiedni fragment canvasu
+        const svg = canvas.toSVG({
+            viewBox: {
+                x: WORK_AREA_LEFT,
+                y: WORK_AREA_TOP,
+                width: widthPx,
+                height: heightPx
+            },
+            width: `${widthPx}px`,
+            height: `${heightPx}px`,
+        });
+
+        // Wysyłamy do backendu
+        const response = await fetch('http://localhost:3001/generate-pdf', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                svgContent: svg,
+                widthMm: wMm,
+                heightMm: hMm,
+                widthPx: widthPx,
+                heightPx: heightPx
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`PDF Service Error ${response.status}: ${errorText}`);
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `pieczatka_${wMm}x${hMm}_HQ.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error('Download Service PDF error:', e);
+        alert('Błąd generowania PDF przez serwis.\n\nUpewnij się, że:\n1. Backend działa (port 3001)\n2. Nie ma blokady CORS');
+    }
+}
+
+export async function resizePdfService(file: File, widthMm: number, heightMm: number) {
+    try {
+        console.log('Resizing PDF...', { name: file.name, widthMm, heightMm });
+
+        // Convert file to base64
+        const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => {
+                const result = reader.result as string;
+                // Remove data:application/pdf;base64, prefix
+                const base64Data = result.split(',')[1];
+                resolve(base64Data);
+            };
+            reader.onerror = error => reject(error);
+        });
+
+        // Wysyłamy do backendu
+        const response = await fetch('http://localhost:3001/resize-pdf', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                pdfBase64: base64,
+                widthMm,
+                heightMm
+            }),
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`PDF Service Error ${response.status}: ${errorText}`);
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `resized_${widthMm}x${heightMm}_${file.name}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+    } catch (e) {
+        console.error('Resize PDF Service error:', e);
+        throw e; // Rzuć dalej, aby modal mógł obsłużyć błąd
+    }
+}
+
 // --- Render Helpers ---
 
 function getUserObjects(canvas: fabric.Canvas) {

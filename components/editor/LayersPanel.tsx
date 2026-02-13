@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import * as fabric from 'fabric';
 import {
     getUserObjects,
@@ -9,6 +9,8 @@ import {
     toggleLock,
     toggleVisibility,
     deleteObject,
+    bringToFront,
+    sendToBack,
 } from '@/lib/canvas-logic';
 import {
     ChevronUp,
@@ -21,7 +23,11 @@ import {
     Type as TypeIcon,
     Square,
     Image as ImageIcon,
+    Copy,
+    ArrowUpToLine,
+    ArrowDownToLine,
     X,
+    MoreVertical
 } from 'lucide-react';
 
 interface LayersPanelProps {
@@ -48,11 +54,19 @@ export default function LayersPanel({
     onClose,
 }: LayersPanelProps) {
     const dark = theme === 'dark';
+    const [editingId, setEditingId] = useState<string | null>(null);
 
     // Pobierz obiekty użytkownika (odwrócona kolejność – wierzch na górze)
     const layers = useMemo(() => {
         if (!canvas) return [];
-        return [...getUserObjects(canvas)].reverse();
+        const userObjects = getUserObjects(canvas);
+        // Gwarancja ID dla każdego obiektu przed wyrenderowaniem listy
+        userObjects.forEach(obj => {
+            if (!(obj as any).__uid) {
+                (obj as any).__uid = 'id-' + Math.random().toString(36).substr(2, 9);
+            }
+        });
+        return [...userObjects].reverse();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [canvas, refreshKey]);
 
@@ -66,12 +80,85 @@ export default function LayersPanel({
         return (obj as any).__stampName || obj.type || 'Obiekt';
     };
 
-    const handleSelect = (obj: fabric.FabricObject) => {
+    // Helper to identify objects since fabric doesn't enforce IDs
+    const getObjectId = (obj: fabric.FabricObject) => {
+        if (!obj) return '-1';
+        return (obj as any).__uid || (obj as any).id || '-1';
+    };
+
+    // Initialize UIDs for objects if missing
+    useEffect(() => {
+        if (!canvas) return;
+        canvas.getObjects().forEach((obj) => {
+            if (!(obj as any).__uid) {
+                (obj as any).__uid = 'id-' + Math.random().toString(36).substr(2, 9);
+            }
+        });
+    }, [canvas, refreshKey]);
+
+
+    // Memoize the set of selected IDs for O(1) lookup during render
+    const selectedIds = useMemo(() => {
+        const ids = new Set<string>();
+
+        // Use direct canvas state if available
+        const activeObjects = canvas ? canvas.getActiveObjects() : (
+            selectedObject ? (
+                selectedObject.type === 'activeSelection'
+                    ? (selectedObject as fabric.ActiveSelection).getObjects()
+                    : [selectedObject]
+            ) : []
+        );
+
+        activeObjects.forEach(obj => {
+            const id = getObjectId(obj);
+            if (id !== '-1') ids.add(id);
+        });
+
+        return ids;
+    }, [canvas, selectedObject, refreshKey]);
+
+    const handleSelect = (obj: fabric.FabricObject, e: React.MouseEvent) => {
         if (!canvas) return;
         if ((obj as any).__locked || !obj.visible) return;
-        canvas.setActiveObject(obj);
-        canvas.renderAll();
-        onSelectionChange(obj);
+
+        // Multi-selection logic with Ctrl/Shift
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            // Pobieramy aktualnie zaznaczone obiekty bezpośrednio z canvasa - to najpewniejsza metoda
+            const currentSelection = canvas.getActiveObjects();
+            const objId = getObjectId(obj);
+            const isAlreadySelected = currentSelection.some(o => getObjectId(o) === objId);
+
+            let nextSelection: fabric.FabricObject[];
+            if (isAlreadySelected) {
+                // Usuwamy z selekcji
+                nextSelection = currentSelection.filter(o => getObjectId(o) !== objId);
+            } else {
+                // Dodajemy do selekcji
+                nextSelection = [...currentSelection, obj];
+            }
+
+            // Czyścimy obecne zaznaczenie i ustawiamy nowe
+            canvas.discardActiveObject();
+
+            if (nextSelection.length === 1) {
+                canvas.setActiveObject(nextSelection[0]);
+            } else if (nextSelection.length > 1) {
+                const sel = new fabric.ActiveSelection(nextSelection, { canvas });
+                canvas.setActiveObject(sel);
+            }
+
+            // Powiadamiamy system o zmianie (przekazując obiekt ActiveSelection lub null)
+            onSelectionChange(canvas.getActiveObject() || null);
+        } else {
+            // Single selection
+            canvas.setActiveObject(obj);
+            onSelectionChange(obj);
+        }
+
+        canvas.requestRenderAll();
+        // Force refreshKey update to ensure memoized selectionIds updates
+        onObjectModified();
     };
 
     const handleRename = (obj: fabric.FabricObject, name: string) => {
@@ -79,21 +166,15 @@ export default function LayersPanel({
         onObjectModified();
     };
 
-    const handleMoveUp = (obj: fabric.FabricObject) => {
-        if (!canvas) return;
-        moveLayerUp(canvas, obj);
-        onObjectModified();
-    };
-
-    const handleMoveDown = (obj: fabric.FabricObject) => {
-        if (!canvas) return;
-        moveLayerDown(canvas, obj);
-        onObjectModified();
+    const handleRenameKeyDown = (e: React.KeyboardEvent, obj: fabric.FabricObject) => {
+        if (e.key === 'Enter') {
+            setEditingId(null);
+        }
     };
 
     const handleToggleLock = (obj: fabric.FabricObject) => {
         toggleLock(obj);
-        canvas?.renderAll();
+        canvas?.requestRenderAll();
         onObjectModified();
     };
 
@@ -103,21 +184,89 @@ export default function LayersPanel({
         onObjectModified();
     };
 
-    const handleDelete = (obj: fabric.FabricObject) => {
+    const handleBringToFrontAction = () => {
+        if (!canvas || !selectedObject) return;
+        if (selectedObject.type === 'activeSelection') {
+            (selectedObject as fabric.ActiveSelection).forEachObject(o => bringToFront(canvas, o));
+        } else {
+            bringToFront(canvas, selectedObject);
+        }
+        onObjectModified();
+    };
+
+    const handleSendToBackAction = () => {
+        if (!canvas || !selectedObject) return;
+        if (selectedObject.type === 'activeSelection') {
+            // Reverse order for send to back to maintain relative order if possible, or just send all
+            (selectedObject as fabric.ActiveSelection).forEachObject(o => sendToBack(canvas, o));
+        } else {
+            sendToBack(canvas, selectedObject);
+        }
+        onObjectModified();
+    };
+
+    const handleDeleteAction = () => {
         if (!canvas) return;
-        deleteObject(canvas, obj);
+        if (selectedObject) {
+            if (selectedObject.type === 'activeSelection') {
+                (selectedObject as fabric.ActiveSelection).forEachObject(o => deleteObject(canvas, o));
+            } else {
+                deleteObject(canvas, selectedObject);
+            }
+        }
         onSelectionChange(null);
         onObjectModified();
     };
 
+    const handleDuplicateAction = () => {
+        if (!canvas || !selectedObject) return;
+        // Logic handles active object automatically
+        import('@/lib/canvas-logic').then(mod => {
+            mod.duplicateActive(canvas);
+            onObjectModified();
+        });
+    };
+
+    // Helper to get all currently selected objects as a flat array
+    const getSelectedObjectsFlat = () => {
+        if (!selectedObject) return [];
+        if (selectedObject.type === 'activeSelection') {
+            return (selectedObject as fabric.ActiveSelection).getObjects();
+        }
+        return [selectedObject];
+    };
+
     const itemBg = (obj: fabric.FabricObject) => {
-        const isSelected = selectedObject === obj;
-        if (isSelected) return dark ? 'bg-indigo-500/20 border-indigo-500/40' : 'bg-indigo-50 border-indigo-300';
+        const objId = getObjectId(obj);
+        const isSelected = selectedIds.has(objId) || (canvas?.getActiveObjects() || []).includes(obj);
+
+        if (isSelected) {
+            return dark ? 'bg-indigo-500/30 border-indigo-400/50 shadow-sm' : 'bg-indigo-50 border-indigo-300 shadow-sm';
+        }
         return dark ? 'bg-zinc-800/50 border-zinc-700/50 hover:bg-zinc-700/50' : 'bg-zinc-50 border-zinc-200 hover:bg-zinc-100';
     };
 
     const iconBtn = `flex items-center justify-center w-7 h-7 rounded-md transition-colors cursor-pointer ${dark ? 'hover:bg-zinc-600 text-zinc-400' : 'hover:bg-zinc-200 text-zinc-500'
         }`;
+    const headerBtn = `flex items-center justify-center w-8 h-8 rounded-lg transition-colors cursor-pointer ${dark ? 'hover:bg-zinc-700 text-zinc-300' : 'hover:bg-zinc-100 text-zinc-600'}`;
+
+    // ── Toolbar Actions (Top) ───────────────────────────
+    const ToolbarActions = (
+        <div className={`grid grid-cols-4 gap-1 p-2 border-b ${dark ? 'border-zinc-700 bg-zinc-900' : 'border-zinc-200 bg-white'}`}>
+            <button onClick={handleBringToFrontAction} className={headerBtn} title="Na wierzch">
+                <ArrowUpToLine size={16} />
+            </button>
+            <button onClick={handleSendToBackAction} className={headerBtn} title="Pod spód">
+                <ArrowDownToLine size={16} />
+            </button>
+            <button onClick={handleDuplicateAction} className={headerBtn} title="Duplikuj">
+                <Copy size={16} />
+            </button>
+            <button onClick={handleDeleteAction} className={`${headerBtn} hover:text-red-500`} title="Usuń">
+                <Trash2 size={16} />
+            </button>
+        </div>
+    );
 
     // ── Content shared between desktop + mobile ─────────
     const layerList = (
@@ -135,13 +284,15 @@ export default function LayersPanel({
                 const locked = !!(obj as any).__locked;
                 const visible = obj.visible !== false;
                 const name = getObjectName(obj);
+                const uid = (obj as any).__uid;
+                const isEditing = editingId === uid;
 
                 return (
                     <div
-                        key={idx}
-                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border transition-all cursor-pointer ${itemBg(obj)} ${!visible ? 'opacity-40' : ''
+                        key={uid || idx}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border transition-all cursor-pointer select-none ${itemBg(obj)} ${!visible ? 'opacity-40' : ''
                             }`}
-                        onClick={() => handleSelect(obj)}
+                        onClick={(e) => handleSelect(obj, e)}
                     >
                         {/* Icon */}
                         <span className={`flex-shrink-0 ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>
@@ -149,39 +300,32 @@ export default function LayersPanel({
                         </span>
 
                         {/* Name (editable on double-click) */}
-                        <input
-                            type="text"
-                            className={`flex-1 min-w-0 text-xs font-semibold bg-transparent outline-none truncate ${dark ? 'text-zinc-100 placeholder-zinc-500' : 'text-zinc-800 placeholder-zinc-400'
-                                }`}
-                            value={name}
-                            placeholder="Obiekt"
-                            onChange={(e) => handleRename(obj, e.target.value)}
-                            onClick={(e) => e.stopPropagation()}
-                            onDoubleClick={(e) => (e.target as HTMLInputElement).select()}
-                        />
+                        {isEditing ? (
+                            <input
+                                autoFocus
+                                type="text"
+                                className={`flex-1 min-w-0 text-xs font-semibold bg-transparent outline-none truncate ${dark ? 'text-zinc-100' : 'text-zinc-800'
+                                    }`}
+                                value={name}
+                                onChange={(e) => handleRename(obj, e.target.value)}
+                                onKeyDown={(e) => handleRenameKeyDown(e, obj)}
+                                onBlur={() => setEditingId(null)}
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        ) : (
+                            <span
+                                className={`flex-1 min-w-0 text-xs font-semibold truncate ${dark ? 'text-zinc-300' : 'text-zinc-700'}`}
+                                onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingId(uid);
+                                }}
+                            >
+                                {name}
+                            </span>
+                        )}
 
-                        {/* Actions */}
+                        {/* Actions (Lock/Hide - kept on row) */}
                         <div className="flex items-center gap-0.5 flex-shrink-0">
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleMoveUp(obj);
-                                }}
-                                className={iconBtn}
-                                title="Wyżej"
-                            >
-                                <ChevronUp size={12} />
-                            </button>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleMoveDown(obj);
-                                }}
-                                className={iconBtn}
-                                title="Niżej"
-                            >
-                                <ChevronDown size={12} />
-                            </button>
                             <button
                                 onClick={(e) => {
                                     e.stopPropagation();
@@ -202,16 +346,6 @@ export default function LayersPanel({
                             >
                                 {visible ? <Eye size={12} /> : <EyeOff size={12} />}
                             </button>
-                            <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleDelete(obj);
-                                }}
-                                className={`${iconBtn} hover:text-red-400`}
-                                title="Usuń"
-                            >
-                                <Trash2 size={12} />
-                            </button>
                         </div>
                     </div>
                 );
@@ -229,7 +363,7 @@ export default function LayersPanel({
                 style={{ maxHeight: '60vh' }}
             >
                 {/* Handle bar + close */}
-                <div className="flex items-center justify-between px-4 py-3">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-200 dark:border-zinc-700">
                     <div className="flex items-center gap-2">
                         <div className={`w-8 h-1 rounded-full ${dark ? 'bg-zinc-600' : 'bg-zinc-300'}`} />
                         <h2 className={`text-xs font-semibold uppercase tracking-wide ${dark ? 'text-zinc-400' : 'text-zinc-500'}`}>
@@ -244,8 +378,9 @@ export default function LayersPanel({
                         <X size={16} />
                     </button>
                 </div>
+                {ToolbarActions}
 
-                <div className="overflow-y-auto px-3 pb-4 flex flex-col gap-1" style={{ maxHeight: 'calc(60vh - 52px)' }}>
+                <div className="overflow-y-auto px-3 pb-4 flex flex-col gap-1" style={{ maxHeight: 'calc(60vh - 100px)' }}>
                     {layerList}
                 </div>
             </div>
@@ -269,6 +404,8 @@ export default function LayersPanel({
                     Warstwy ({layers.length})
                 </h2>
             </div>
+
+            {ToolbarActions}
 
             {/* Lista warstw */}
             <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-1">
