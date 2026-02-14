@@ -15,8 +15,16 @@ import {
     pxToPt,
     ptToPx,
     fitObjectToCanvas,
+    fitObjectToWidth,
+    fitObjectToHeight,
     splitTextByLines,
+    addText,
+    setTextAlignWithOrigin,
+    centerObjectH,
+    centerObjectV,
+    alignObjectToEdge,
 } from '@/lib/canvas-logic';
+import { GusImport } from './GusImport';
 import {
     Ruler,
     Type as TypeIcon,
@@ -32,10 +40,25 @@ import {
     Maximize,
     ArrowUpToLine,
     ArrowDownToLine,
+    ArrowLeftToLine,
+    ArrowRightToLine,
+    MoveHorizontal,
+    MoveVertical,
     Trash2,
     RotateCcw,
     X,
     Split,
+    LayoutTemplate,
+    StretchHorizontal,
+    StretchVertical,
+    Maximize2,
+    Grid3X3,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    AlignHorizontalJustifyCenter,
+    AlignVerticalJustifyCenter,
 } from 'lucide-react';
 
 interface PropertiesPanelProps {
@@ -115,112 +138,254 @@ export default function PropertiesPanel({
         [canvas]
     );
 
-    const updateProp = useCallback(
-        (prop: string, value: any) => {
-            if (!selectedObject || !canvas) return;
+    // ── Helpers ───────────────────────────────────────────
+    const isEditingText = (obj: any): boolean => {
+        return obj && obj.type === 'i-text' && obj.isEditing;
+    };
 
-            // Obsługa mieszanego formatowania dla IText (jeśli jest zaznaczenie tekstu)
-            if (selectedObject.type === 'i-text') {
-                const t = selectedObject as fabric.IText;
-                if (t.selectionStart !== undefined && t.selectionEnd !== undefined && t.selectionStart !== t.selectionEnd) {
-                    t.setSelectionStyles({ [prop]: value });
-                } else {
-                    t.set(prop, value);
-                }
+    const applyStyle = (key: string, value: any) => {
+        if (!canvas || !selectedObject) return;
+
+        if (selectedObject.type === 'i-text') {
+            const textObj = selectedObject as fabric.IText;
+            // Sprawdź czy jest aktywne zaznaczenie tekstu wewnątrz obiektu
+            if (isEditingText(textObj) && textObj.selectionStart !== textObj.selectionEnd) {
+                textObj.setSelectionStyles({ [key]: value });
             } else {
-                (selectedObject as any).set(prop, value);
+                // Jeśli nie ma zaznaczenia tekstu, aplikuj do całego obiektu
+                textObj.set(key as any, value);
+
+                // Jeśli zmieniamy font/rozmiar, warto wyczyścić style lokalne, aby całość była spójna
+                if (textObj.styles && (key === 'fontFamily' || key === 'fontSize' || key === 'fill' || key === 'fontWeight' || key === 'fontStyle' || key === 'underline')) {
+                    const styles = textObj.styles;
+                    for (const row in styles) {
+                        for (const char in styles[row]) {
+                            delete styles[row][char][key];
+                        }
+                    }
+                }
             }
-
-            debouncedRender();
-        },
-        [selectedObject, canvas, debouncedRender]
-    );
-
-    // ── Handlery tekstu ───────────────────────────────────
-    const handleFontChange = (val: string) => {
-        setFontFamily(val);
-        updateProp('fontFamily', val);
-    };
-
-    const handleFontSizeChange = (val: number) => {
-        setFontSize(val);
-        setFontSizeWarning(val < 7);
-        updateProp('fontSize', ptToPx(val));
-    };
-
-    const handleCharSpacingChange = (val: number) => {
-        setCharSpacing(val);
-        updateProp('charSpacing', val);
-    };
-
-    const handleTextContentChange = (val: string) => {
-        setTextContent(val);
-        updateProp('text', val);
-    };
-
-    const toggleBold = () => {
-        const next = !isBold;
-        setIsBold(next);
-        updateProp('fontWeight', next ? 'bold' : 'normal');
-    };
-
-    const toggleItalic = () => {
-        const next = !isItalic;
-        setIsItalic(next);
-        updateProp('fontStyle', next ? 'italic' : 'normal');
-    };
-
-    const toggleUnderline = () => {
-        const next = !isUnderline;
-        setIsUnderline(next);
-        updateProp('underline', next);
-    };
-
-    const handleTextAlignChange = (align: string) => {
-        setTextAlign(align);
-        updateProp('textAlign', align);
-    };
-
-    // ── Handler ramki ─────────────────────────────────────
-    const handleStrokeWidthChange = (val: number) => {
-        setStrokeWidth(val);
-        if (selectedObject && canvas) {
-            const pxVal = val * PX_PER_MM;
-            selectedObject.set('strokeWidth', pxVal);
-            (selectedObject as any).__strokeWidth_mm = val;
-            debouncedRender();
+        } else {
+            selectedObject.set(key as any, value);
         }
+
+        canvas.renderAll();
     };
 
-    // ── Pozycjonowanie ────────────────────────────────────
-    const handleAlign = (v: 'top' | 'middle' | 'bottom', h: 'left' | 'center' | 'right') => {
-        if (canvas && selectedObject) alignObject(canvas, selectedObject, v, h);
+
+    const handleFontFamily = (val: string) => applyStyle('fontFamily', val);
+
+    const handleFontSize = (pt: number) => {
+        const px = ptToPx(pt);
+        applyStyle('fontSize', px);
     };
 
-    const handleResetProportions = () => {
-        if (canvas && selectedObject) resetProportions(canvas, selectedObject);
+    const handleBold = () => {
+        if (!selectedObject || selectedObject.type !== 'i-text') return;
+        const textObj = selectedObject as fabric.IText;
+
+        // Check current state (rough check based on whole object or selection)
+        const current = isEditingText(textObj) && textObj.getSelectionStyles().find(s => s.fontWeight)
+            ? (textObj.getSelectionStyles()[0] as any).fontWeight
+            : textObj.fontWeight;
+
+        const next = current === 'bold' ? 'normal' : 'bold';
+        applyStyle('fontWeight', next);
     };
 
-    const handleFitToCanvas = () => {
-        if (canvas && selectedObject) fitObjectToCanvas(canvas, selectedObject);
+    const handleItalic = () => {
+        if (!selectedObject || selectedObject.type !== 'i-text') return;
+        const textObj = selectedObject as fabric.IText;
+
+        // Check current state
+        const current = isEditingText(textObj) && textObj.getSelectionStyles().find(s => s.fontStyle)
+            ? (textObj.getSelectionStyles()[0] as any).fontStyle
+            : textObj.fontStyle;
+
+        const next = current === 'italic' ? 'normal' : 'italic';
+        applyStyle('fontStyle', next);
     };
 
-    const handleSplitLines = () => {
-        if (canvas && selectedObject) splitTextByLines(canvas, selectedObject);
+    const handleUnderline = () => {
+        if (!selectedObject || selectedObject.type !== 'i-text') return;
+        const textObj = selectedObject as fabric.IText;
+
+        // Check current state (underline is boolean in fabric types usually, but let's check)
+        // Actually setSelectionStyles works with object.
+        const current = isEditingText(textObj) && textObj.getSelectionStyles().find(s => s.underline !== undefined)
+            ? (textObj.getSelectionStyles()[0] as any).underline
+            : textObj.underline;
+
+        applyStyle('underline', !current);
     };
 
-    // ── Warstwy ───────────────────────────────────────────
+    // ── Alignment & Formatting ────────────────────────────
+    const handleAlignEdge = (edge: 'left' | 'right' | 'top' | 'bottom') => {
+        if (!canvas || !selectedObject) return;
+        alignObjectToEdge(canvas, selectedObject, edge);
+    };
+
+    const handleFit = (mode: 'width' | 'height' | 'contain') => {
+        if (!canvas || !selectedObject) return;
+        if (mode === 'width') fitObjectToWidth(canvas, selectedObject);
+        else if (mode === 'height') fitObjectToHeight(canvas, selectedObject);
+        else fitObjectToCanvas(canvas, selectedObject);
+    };
+
+    const handleCenterH = () => {
+        if (!canvas || !selectedObject) return;
+        centerObjectH(canvas, selectedObject);
+    };
+
+    const handleCenterV = () => {
+        if (!canvas || !selectedObject) return;
+        centerObjectV(canvas, selectedObject);
+    };
+
+    const handleCenterBoth = () => {
+        if (!canvas || !selectedObject) return;
+        centerObjectH(canvas, selectedObject);
+        centerObjectV(canvas, selectedObject);
+    };
+
+    const handleTextAlign = (align: string) => {
+        if (!selectedObject || selectedObject.type !== 'i-text') return;
+        setTextAlignWithOrigin(selectedObject as fabric.IText, align as any);
+        canvas?.renderAll();
+    };
+
+    const handleSplit = () => {
+        if (!canvas || !selectedObject) return;
+        splitTextByLines(canvas, selectedObject);
+    };
+
+    const handleStrokeWidth = (width: number) => {
+        if (!canvas || !selectedObject) return;
+        (selectedObject as any).__strokeWidth_mm = width;
+        selectedObject.set('strokeWidth', width * PX_PER_MM);
+        setStrokeWidth(width);
+        canvas.renderAll();
+    };
+
     const handleBringToFront = () => {
-        if (canvas && selectedObject) bringToFront(canvas, selectedObject);
+        if (!canvas || !selectedObject) return;
+        bringToFront(canvas, selectedObject);
     };
+
     const handleSendToBack = () => {
-        if (canvas && selectedObject) sendToBack(canvas, selectedObject);
+        if (!canvas || !selectedObject) return;
+        sendToBack(canvas, selectedObject);
     };
 
     // ── Usuwanie ──────────────────────────────────────────
     const handleDelete = () => {
         if (!canvas) return;
         deleteSelected(canvas);
+    };
+
+    // ── GUS Integration ───────────────────────────────────
+    const handleGusData = (data: any) => {
+        if (!canvas) return;
+
+        // Dekodowanie encji HTML
+        const decodeHtml = (html: string) => {
+            if (!html) return '';
+            const txt = document.createElement('textarea');
+            txt.innerHTML = html;
+            return txt.value;
+        };
+
+        // 1. Nazwa firmy (łamanie > 30 znaków)
+        let nazwaRaw = decodeHtml(data.nazwa);
+        let nazwaLines = [nazwaRaw];
+
+        if (nazwaRaw.length > 30) {
+            // Szukamy spacji najbliżej 30 znaku (wstecz)
+            const splitIndex = nazwaRaw.lastIndexOf(' ', 30);
+            if (splitIndex !== -1) {
+                nazwaLines = [
+                    nazwaRaw.substring(0, splitIndex),
+                    nazwaRaw.substring(splitIndex + 1)
+                ];
+            } else {
+                // Jeśli brak spacji w pierwszych 30 znakach, szukamy pierwszej możliwej
+                const nextSpace = nazwaRaw.indexOf(' ', 30);
+                if (nextSpace !== -1) {
+                    nazwaLines = [
+                        nazwaRaw.substring(0, nextSpace),
+                        nazwaRaw.substring(nextSpace + 1)
+                    ];
+                }
+            }
+        }
+
+        // 2. Adres (formatowanie i warunkowe łamanie > 50 znaków)
+        const ulica = decodeHtml(data.ulica || '');
+        const nrDomu = data.nrNieruchomosci || '';
+        const nrLok = data.nrLokalu ? '/' + data.nrLokalu : '';
+        const kod = data.kodPocztowy || '';
+        const miasto = decodeHtml(data.miejscowosc || '');
+
+        const addrPart = `${ulica} ${nrDomu}${nrLok}`;
+        const cityPart = `${kod} ${miasto}`;
+
+        let adresLine = '';
+        if (addrPart.length < 2 && cityPart.length > 1) {
+            // Sam kod i miasto (brak ulicy)
+            adresLine = cityPart;
+        } else {
+            // Pełny adres
+            const fullAddr = `${addrPart}, ${cityPart}`;
+            // Logika 50 znaków -> nowa linia dla miasta
+            // Uwaga: "przecinek" w prompt. "ulica nr, kod miasto"
+            if (fullAddr.length > 50) {
+                adresLine = `${addrPart},\n${cityPart}`;
+            } else {
+                adresLine = fullAddr;
+            }
+        }
+
+        // 3. NIP i REGON
+        // Format: "NIP: [nip]   REGON: [regon]" (3 spacje)
+        // Cyfry w NIP i REGON: Arial Narrow
+        const nipVal = data.nip || '';
+        const regonVal = data.regon || '';
+        let idsLineRaw = '';
+        if (nipVal) idsLineRaw += `NIP: ${nipVal}`;
+        if (nipVal && regonVal) idsLineRaw += '   ';
+        if (regonVal) idsLineRaw += `REGON: ${regonVal}`;
+
+        // Złożenie wszystkiego
+        const finalLines = [
+            ...nazwaLines,
+            adresLine,
+            idsLineRaw
+        ].filter(l => l && l.trim() !== '');
+
+        const textObj = addText(canvas, {
+            text: finalLines.join('\n'),
+            fontFamily: 'Arial', // Domyślna czcionka
+            fontSize: 7 // Domyślny rozmiar (zmniejszony, by zmieścić więcej)
+        });
+
+        // 4. Stylizacja cyfr w linii NIP/REGON
+        const styles: any = {};
+        const idsLineIndex = finalLines.findIndex(l => l === idsLineRaw);
+
+        if (idsLineIndex !== -1 && idsLineRaw) {
+            styles[idsLineIndex] = {};
+            for (let i = 0; i < idsLineRaw.length; i++) {
+                const char = idsLineRaw[i];
+                if (/\d/.test(char)) {
+                    styles[idsLineIndex][i] = { fontFamily: 'Arial Narrow' };
+                }
+            }
+        }
+
+        textObj.set('styles', styles);
+        canvas.renderAll();
+        canvas.setActiveObject(textObj);
+        canvas.renderAll();
     };
 
     const isText = selectedObject?.type === 'i-text';
@@ -230,8 +395,7 @@ export default function PropertiesPanel({
     // ── Styl ──────────────────────────────────────────────
     const dark = theme === 'dark';
 
-    const labelClass = `text-xs font-medium uppercase tracking-wide mb-1.5 block ${dark ? 'text-zinc-400' : 'text-zinc-500'
-        }`;
+    const labelClass = `text-xs font-medium uppercase tracking-wide mb-1.5 block ${dark ? 'text-zinc-500' : 'text-zinc-500'}`;
 
     const inputClass = `w-full rounded-lg px-3 py-2 text-sm outline-none transition-colors ${dark
         ? 'bg-zinc-700 text-zinc-100 border border-zinc-600 focus:border-indigo-500'
@@ -266,235 +430,207 @@ export default function PropertiesPanel({
     // ── Shared content ────────────────────────────────────
     const panelContent = (
         <div className={`p-5 flex flex-col gap-6 ${isMobile ? 'pb-8' : ''}`}>
-            {/* ── Brak zaznaczenia ─────────────────────────── */}
             {!hasSelection && (
-                <div className={sectionCard}>
-                    <div className="flex flex-col gap-5">
-                        <div>
-                            <p className={labelClass}>Wymiary pieczątki</p>
-                            <p
-                                className={`text-xl font-bold ${dark ? 'text-zinc-100' : 'text-zinc-800'
-                                    }`}
-                            >
-                                {stampDim.w} × {stampDim.h} mm
-                            </p>
-                        </div>
-                        <div>
-                            <p className={labelClass}>Typ</p>
-                            <p
-                                className={`text-sm font-medium ${dark ? 'text-zinc-300' : 'text-zinc-600'
-                                    }`}
-                            >
-                                Prostokąt
-                            </p>
-                        </div>
-                        <div
-                            className={`rounded-xl p-4 text-xs leading-relaxed ${dark ? 'bg-zinc-800/50 text-zinc-400' : 'bg-zinc-50 text-zinc-500'
-                                }`}
-                        >
-                            Kliknij &quot;Tekst&quot; lub &quot;Ramka&quot; na pasku narzędzi, aby
-                            dodać element do pieczątki.
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════
-                PANEL TEKSTU
-               ═══════════════════════════════════════════════ */}
-            {isText && (
-                <div className={sectionCard}>
-                    <div className="flex flex-col gap-6">
-                        {/* Treść */}
-                        <div>
-                            <label className={labelClass}>Treść</label>
-                            <textarea
-                                className={`${inputClass} resize-none h-24 text-base`}
-                                value={textContent}
-                                onChange={(e) => handleTextContentChange(e.target.value)}
-                            />
-                            {/* Split Lines Button */}
-                            <button
-                                onClick={handleSplitLines}
-                                className={`mt-2 flex items-center justify-center gap-2 w-full py-1.5 rounded-lg text-xs font-medium transition-colors ${dark ? 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200' : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700'}`}
-                                title="Rozdziel każdą linię tekstu na osobny obiekt"
-                            >
-                                <Split size={14} /> Rozdziel linie (Enter)
-                            </button>
-                        </div>
-
-                        {/* Czcionka i Rozmiar */}
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="col-span-2">
-                                <label className={labelClass}>Czcionka</label>
-                                <select
-                                    className={inputClass}
-                                    value={fontFamily}
-                                    onChange={(e) => handleFontChange(e.target.value)}
-                                >
-                                    {AVAILABLE_FONTS.map((f) => (
-                                        <option key={f} value={f} style={{ fontFamily: f }}>
-                                            {f}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div>
-                                <label className={labelClass}>Rozmiar (pt)</label>
-                                <input
-                                    type="number"
-                                    className={inputClass}
-                                    value={fontSize}
-                                    min={4}
-                                    max={72}
-                                    step={1}
-                                    onChange={(e) => handleFontSizeChange(Number(e.target.value))}
-                                />
-                            </div>
-                            <div>
-                                <label className={labelClass}>Kerning</label>
-                                <input
-                                    type="number"
-                                    className={inputClass}
-                                    value={charSpacing}
-                                    step={10}
-                                    onChange={(e) => handleCharSpacingChange(Number(e.target.value))}
-                                />
-                            </div>
-                        </div>
-
-                        {fontSizeWarning && (
-                            <div className="flex items-center gap-2 text-xs font-medium text-amber-500 bg-amber-500/10 p-2 rounded-lg">
-                                <AlertTriangle size={14} />
-                                <span>Tekst &lt;7pt – ryzyko nieczytelności</span>
-                            </div>
-                        )}
-
-                        <div className={sectionDivider} />
-
-                        {/* Style i Wyrównanie w jednej linii */}
-                        <div className="flex items-center justify-between">
-                            <div>
-                                <label className={labelClass}>Styl</label>
-                                <div className="flex items-center gap-1">
-                                    <button onClick={toggleBold} className={toggleBtn(isBold)} title="Pogrubienie">
-                                        <Bold size={16} />
-                                    </button>
-                                    <button onClick={toggleItalic} className={toggleBtn(isItalic)} title="Pochylenie">
-                                        <Italic size={16} />
-                                    </button>
-                                    <button onClick={toggleUnderline} className={toggleBtn(isUnderline)} title="Podkreślenie">
-                                        <Underline size={16} />
-                                    </button>
-                                </div>
-                            </div>
-                            <div>
-                                <label className={labelClass}>Wyrównanie</label>
-                                <div className="flex items-center gap-1">
-                                    <button onClick={() => handleTextAlignChange('left')} className={toggleBtn(textAlign === 'left')} title="Do lewej"><AlignLeft size={16} /></button>
-                                    <button onClick={() => handleTextAlignChange('center')} className={toggleBtn(textAlign === 'center')} title="Wyśrodkuj"><AlignCenter size={16} /></button>
-                                    <button onClick={() => handleTextAlignChange('right')} className={toggleBtn(textAlign === 'right')} title="Do prawej"><AlignRight size={16} /></button>
-                                    <button onClick={() => handleTextAlignChange('justify')} className={toggleBtn(textAlign === 'justify')} title="Wyjustuj"><AlignJustify size={16} /></button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════
-                PANEL RAMKI
-               ═══════════════════════════════════════════════ */}
-            {isFrame && (
-                <div className={sectionCard}>
-                    <label className={labelClass}>Grubość linii (mm)</label>
-                    <input
-                        type="number"
-                        className={inputClass}
-                        value={strokeWidth}
-                        min={0.1}
-                        max={5}
-                        step={0.1}
-                        onChange={(e) => handleStrokeWidthChange(Number(e.target.value))}
-                    />
-                </div>
-            )}
-
-            {/* ═══════════════════════════════════════════════
-                WSPÓLNE: POZYCJONOWANIE + WARSTWY + USUWANIE
-               ═══════════════════════════════════════════════ */}
-            {hasSelection && (
                 <>
                     <div className={sectionCard}>
-                        {/* Pozycjonowanie – siatka 3×3 */}
-                        <div>
-                            <label className={labelClass}>Pozycjonowanie</label>
-                            <div className="flex gap-4">
-                                <div className="grid grid-cols-3 gap-1.5 w-fit">
-                                    {(['top', 'middle', 'bottom'] as const).map((v) =>
-                                        (['left', 'center', 'right'] as const).map((h) => {
-                                            const posX = h === 'left' ? 4 : h === 'center' ? 12 : 20;
-                                            const posY = v === 'top' ? 4 : v === 'middle' ? 12 : 20;
-                                            const label = `${v === 'top' ? 'Góra' : v === 'middle' ? 'Środek' : 'Dół'} ${h === 'left' ? 'lewo' : h === 'center' ? 'środek' : 'prawo'}`;
-                                            return (
-                                                <button
-                                                    key={`${v}-${h}`}
-                                                    onClick={() => handleAlign(v, h)}
-                                                    className={actionBtn}
-                                                    title={label}
-                                                >
-                                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                                        <rect x="2" y="2" width="20" height="20" rx="2" opacity="0.3" />
-                                                        <circle cx={posX} cy={posY} r="3" fill="currentColor" stroke="none" />
-                                                    </svg>
-                                                </button>
-                                            );
-                                        })
-                                    )}
-                                </div>
+                        <div className="flex flex-col gap-5">
+                            <div>
+                                <p className={labelClass}>Wymiary pieczątki</p>
+                                <p className={`text-xl font-bold ${dark ? 'text-zinc-100' : 'text-zinc-800'}`}>
+                                    {stampDim.w} × {stampDim.h} mm
+                                </p>
+                            </div>
+                            <div>
+                                <p className={labelClass}>Typ</p>
+                                <p className={`text-sm font-medium ${dark ? 'text-zinc-300' : 'text-zinc-600'}`}>
+                                    Prostokąt
+                                </p>
+                            </div>
+                            <div className={`rounded-xl p-4 text-xs leading-relaxed ${dark ? 'bg-zinc-800/50 text-zinc-400' : 'bg-zinc-50 text-zinc-500'}`}>
+                                Kliknij &quot;Tekst&quot; lub &quot;Ramka&quot; na pasku narzędzi, aby dodać element do pieczątki.
+                            </div>
+                        </div>
+                    </div>
+                    {/* GUS Import */}
+                    <GusImport onDataLoaded={handleGusData} dark={dark} />
+                </>
+            )}
 
-                                <div className="flex flex-col gap-2 flex-1">
-                                    <button
-                                        onClick={handleFitToCanvas}
-                                        className={`flex items-center gap-2 w-full py-2 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer ${dark
-                                            ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
-                                            : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                                            }`}
-                                    >
-                                        <Maximize size={14} />
-                                        Dopasuj i centruj
-                                    </button>
+            {/* ═══════════════════════════════════════════════
+                JEST ZAZNACZENIE
+             ═══════════════════════════════════════════════ */}
+            {hasSelection && (
+                <>
+                    {/* ── Pozycjonowanie i Wyrównanie (New Section) ──────── */}
+                    <div className={sectionCard}>
+                        <p className={labelClass}>Rozmieszczenie</p>
 
-                                    {isText && (selectedObject as any)?.scaleX !== 1 && (
-                                        <button
-                                            onClick={handleResetProportions}
-                                            className={`flex items-center gap-2 w-full py-2 px-3 rounded-lg text-xs font-medium transition-all cursor-pointer ${dark
-                                                ? 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
-                                                : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200'
-                                                }`}
-                                        >
-                                            <RotateCcw size={14} />
-                                            Reset proporcji
-                                        </button>
-                                    )}
-                                </div>
+                        {/* 1. Main Action: Fit & Center */}
+                        <button
+                            onClick={() => handleFit('contain')}
+                            className="w-full bg-indigo-500 hover:bg-indigo-600 text-white py-3 rounded-lg flex items-center justify-center gap-2 mb-4 font-medium transition-colors shadow-sm"
+                            title="Dopasuj rozmiar i wyśrodkuj (70% przypadków)"
+                        >
+                            <Maximize className="w-5 h-5" />
+                            <span>Dopasuj i wyśrodkuj</span>
+                        </button>
+
+                        {/* 2. Wyrównanie (Alignment) - Neighbors only */}
+                        <div className="mb-4">
+                            <p className="text-[10px] uppercase text-zinc-400 font-semibold mb-2 ml-1">Wyrównanie</p>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleAlignEdge('left')} className={`${actionBtn} flex-1`} title="Do lewej">
+                                    <ArrowLeftToLine className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => handleAlignEdge('top')} className={`${actionBtn} flex-1`} title="Do góry">
+                                    <ArrowUpToLine className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => handleAlignEdge('bottom')} className={`${actionBtn} flex-1`} title="Do dołu">
+                                    <ArrowDownToLine className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => handleAlignEdge('right')} className={`${actionBtn} flex-1`} title="Do prawej">
+                                    <ArrowRightToLine className="w-4 h-4" />
+                                </button>
                             </div>
                         </div>
 
-                        <div className={sectionDivider} />
+                        {/* 3. Środkowanie (Centering) */}
+                        <div className="mb-4">
+                            <p className="text-[10px] uppercase text-zinc-400 font-semibold mb-2 ml-1">Środkowanie</p>
+                            <div className="flex gap-2">
+                                <button onClick={handleCenterH} className={`${actionBtn} flex-1`} title="Centruj poziomo">
+                                    <AlignHorizontalJustifyCenter className="w-4 h-4" />
+                                </button>
+                                <button onClick={handleCenterV} className={`${actionBtn} flex-1`} title="Centruj pionowo">
+                                    <AlignVerticalJustifyCenter className="w-4 h-4 rotate-90" />
+                                </button>
+                                <button onClick={handleCenterBoth} className={`${actionBtn} flex-1 bg-zinc-200 dark:bg-zinc-700`} title="Centruj całkowicie">
+                                    <Maximize2 className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
 
+                        {/* 4. Dopasowanie (Fitting) */}
+                        <div>
+                            <p className="text-[10px] uppercase text-zinc-400 font-semibold mb-2 ml-1">Dopasowanie</p>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleFit('width')} className={`${actionBtn} flex-1`} title="Dopasuj szerokość">
+                                    <StretchHorizontal className="w-4 h-4" />
+                                </button>
+                                <button onClick={() => handleFit('height')} className={`${actionBtn} flex-1`} title="Dopasuj wysokość">
+                                    <StretchVertical className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
                     </div>
 
+                    {/* ── Formatowanie tekstu ────────────────────── */}
+                    {isText && (
+                        <div className={sectionCard}>
+                            <p className={labelClass}>Formatowanie tekstu</p>
+                            <div className="flex flex-col gap-4">
+                                {/* Font Family */}
+                                <div className="relative">
+                                    <select
+                                        className={inputClass}
+                                        value={(selectedObject as fabric.IText).fontFamily}
+                                        onChange={(e) => handleFontFamily(e.target.value)}
+                                    >
+                                        {AVAILABLE_FONTS.map((font) => (
+                                            <option key={font} value={font} style={{ fontFamily: font }}>
+                                                {font}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Font Size & Styles */}
+                                <div className="flex gap-2">
+                                    <input
+                                        type="number"
+                                        className={`${inputClass} w-20 text-center`}
+                                        value={Math.round(pxToPt((selectedObject as fabric.IText).fontSize || 10))}
+                                        onChange={(e) => handleFontSize(Number(e.target.value))}
+                                    />
+                                    <div className="flex gap-1 flex-1 justify-end">
+                                        <button onClick={handleBold} className={toggleBtn((selectedObject as fabric.IText).fontWeight === 'bold')}>
+                                            <Bold className="w-4 h-4" />
+                                        </button>
+                                        <button onClick={handleItalic} className={toggleBtn((selectedObject as fabric.IText).fontStyle === 'italic')}>
+                                            <Italic className="w-4 h-4" />
+                                        </button>
+                                        <button onClick={handleUnderline} className={toggleBtn(!!(selectedObject as fabric.IText).underline)}>
+                                            <Underline className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Text Align */}
+                                <div className="flex gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg">
+                                    <button onClick={() => handleTextAlign('left')} className={`${toggleBtn((selectedObject as fabric.IText).textAlign === 'left')} flex-1`}>
+                                        <AlignLeft className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={() => handleTextAlign('center')} className={`${toggleBtn((selectedObject as fabric.IText).textAlign === 'center')} flex-1`}>
+                                        <AlignCenter className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={() => handleTextAlign('right')} className={`${toggleBtn((selectedObject as fabric.IText).textAlign === 'right')} flex-1`}>
+                                        <AlignRight className="w-4 h-4" />
+                                    </button>
+                                    <button onClick={() => handleTextAlign('justify')} className={`${toggleBtn((selectedObject as fabric.IText).textAlign === 'justify')} flex-1`}>
+                                        <AlignJustify className="w-4 h-4" />
+                                    </button>
+                                </div>
+
+                                <button
+                                    onClick={handleSplit}
+                                    className={actionBtn + " w-full mt-2 gap-2"}
+                                    title="Rozdziel linie na osobne obiekty"
+                                >
+                                    <Split className="w-4 h-4" />
+                                    <span className="text-xs font-medium">Rozdziel linie</span>
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── Ramka ──────────────────────────────────── */}
+                    {isFrame && (
+                        <div className={sectionCard}>
+                            <p className={labelClass}>Grubość ramki</p>
+                            <div className="flex gap-2">
+                                {[0.2, 0.5, 0.8, 1.0].map((mm) => (
+                                    <button
+                                        key={mm}
+                                        onClick={() => handleStrokeWidth(mm)}
+                                        className={`${toggleBtn((selectedObject as any).__strokeWidth_mm === mm)} flex-1 text-xs`}
+                                    >
+                                        {mm}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── Warstwy i Akcje ────────────────────────── */}
                     <div className={sectionCard}>
-                        {/* Usuwanie */}
+                        <p className={labelClass}>Warstwy i akcje</p>
+                        <div className="grid grid-cols-2 gap-2">
+                            <button onClick={handleBringToFront} className={actionBtn} title="Przesuń na wierzch">
+                                <span className="text-xs">Na wierzch</span>
+                            </button>
+                            <button onClick={handleSendToBack} className={actionBtn} title="Przesuń na spód">
+                                <span className="text-xs">Na spód</span>
+                            </button>
+                        </div>
+                        <div className={sectionDivider} />
                         <button onClick={handleDelete} className={dangerBtn}>
-                            <Trash2 size={16} />
-                            Usuń zaznaczony element
+                            <Trash2 className="w-4 h-4" />
+                            <span>Usuń element</span>
                         </button>
                     </div>
                 </>
             )}
-        </div>
+        </div >
     );
 
     // ── Header content ────────────────────────────────────

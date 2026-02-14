@@ -15,7 +15,7 @@ export const STAMP_SIZES: StampSize[] = [
   { widthMm: 58, heightMm: 22, label: '58 x 22 mm' },
 ];
 
-export const DEFAULT_SIZE = STAMP_SIZES[0];
+export const DEFAULT_SIZE = STAMP_SIZES[1]; // 47x18 mm
 
 // Marginesy wokół pieczątki na canvas (miejsce na linijki)
 export const RULER_SIZE = 24; // px – grubość linijki
@@ -914,15 +914,25 @@ export function alignObject(
   canvas.renderAll();
 }
 
-// Wygodne aliasy (zachowane dla kompatybilności)
-export function centerObjectH(canvas: fabric.Canvas, obj: fabric.FabricObject) {
-  alignObject(canvas, obj, 'middle', 'center');
-}
-export function centerObjectV(canvas: fabric.Canvas, obj: fabric.FabricObject) {
-  alignObject(canvas, obj, 'middle', 'center');
-}
+// Wygodne aliasy (zachowane dla kompatybilności - deleted to avoid conflict with new impl)
+// export function centerObjectH(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+//   alignObject(canvas, obj, 'middle', 'center');
+// }
+// export function centerObjectV(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+//   alignObject(canvas, obj, 'middle', 'center');
+// }
 export function centerObjectBoth(canvas: fabric.Canvas, obj: fabric.FabricObject) {
-  alignObject(canvas, obj, 'middle', 'center');
+  // Use new helpers
+  if (centerObjectH && centerObjectV) {
+    centerObjectH(canvas, obj);
+    centerObjectV(canvas, obj);
+  } else {
+    // Fallback if needed or just align logic
+    // Actually we will redefine centerObjectBoth at bottom too or just implement it here using alignObject
+    // user wants fit + center.
+    // Let's just use alignObject for centerObjectBoth as it maps to center/middle
+    alignObject(canvas, obj, 'middle', 'center');
+  }
 }
 
 // ── Reset proporcji (scaleX → 1) ─────────────────────────
@@ -992,6 +1002,7 @@ export function fitObjectToCanvas(canvas: fabric.Canvas, obj: fabric.FabricObjec
 }
 
 // ── Rozdziel tekst na linie (każda linia jako osobny obiekt)
+// ── Rozdziel tekst na linie (każda linia jako osobny obiekt)
 export function splitTextByLines(canvas: fabric.Canvas, obj: fabric.FabricObject) {
   if (obj.type !== 'i-text') return;
   const t = obj as fabric.IText;
@@ -1000,12 +1011,18 @@ export function splitTextByLines(canvas: fabric.Canvas, obj: fabric.FabricObject
   // Jeśli tylko jedna linia - nie ma co dzielić
   if (textLines.length <= 1) return;
 
-  // Obliczamy pozycję Top-Left oryginalnego obiektu, niezależnie od origin, aby uniknąć przesunięć
+  // Pobieramy właściwości oryginału
+  const originalWidth = t.width || 0;
+  const originalScaleX = t.scaleX || 1;
+  const originalTextAlign = t.textAlign || 'left';
+  const angleRad = fabric.util.degreesToRadians(t.angle || 0);
+
+  // Obliczamy pozycję Top-Left oryginalnego obiektu
   const topLeft = t.getPointByOrigin('left', 'top');
   const rootTop = topLeft.y;
   const rootLeft = topLeft.x;
 
-  // Przybliżona wysokość linii (w zależności od font size i line height)
+  // Przybliżona wysokość linii
   const computedLineHeight = t.fontSize! * (t.lineHeight ?? 1.16) * (t.scaleY || 1);
   const styles = t.styles || {};
 
@@ -1016,36 +1033,68 @@ export function splitTextByLines(canvas: fabric.Canvas, obj: fabric.FabricObject
     // Tworzymy nowy obiekt IText dla każdej linii
     const newStyles = styles[i] ? { 0: styles[i] } : {};
 
-    // Pobieramy właściwości i usuwamy te, które mogą powodować konflikty w konstruktorze
+    // Kopiujemy opcje
     const options: any = (t as any).toObject(['__stampType', '__stampName', '__locked', '__strokeWidth_mm', '__boundaryMode']);
     delete options.type;
     delete options.version;
-    // Usuwamy transformacje, bo ustawimy je ręcznie
     delete options.top;
     delete options.left;
     delete options.angle;
+    delete options.width; // Szerokość zostanie przeliczona automatycznie dla nowej linii
+    delete options.height;
 
-    // Obliczamy bazową pozycję Top-Left dla danej linii
-    let lineLeft = rootLeft;
-    let lineTop = rootTop + i * computedLineHeight;
+    // Tworzymy obiekt tymczasowo, by poznać jego wymiary
+    // Ważne: musimy zachować te same parametry fontu, by szerokość była poprawna
+    const tempObj = new fabric.IText(line, {
+      ...options,
+      text: line,
+      styles: newStyles as any,
+      fontFamily: t.fontFamily,
+      fontSize: t.fontSize,
+      charSpacing: t.charSpacing,
+      fontWeight: t.fontWeight,
+      fontStyle: t.fontStyle,
+      scaleX: t.scaleX, // Skala wpływa na wizualny odbiór, ale width w fabric jest "unscaled".
+    });
 
-    // Jeśli był obrót, musimy przesunąć każdą kolejną linię wzdłuż obróconej osi Y
-    if (t.angle && t.angle !== 0) {
-      const angleRad = fabric.util.degreesToRadians(t.angle);
-      const dist = i * computedLineHeight;
-      // Przesunięcie wektora (0, dist) o kąt obrotu
-      const offsetX = -Math.sin(angleRad) * dist;
-      const offsetY = Math.cos(angleRad) * dist;
-      lineLeft += offsetX;
-      lineTop += offsetY;
+    // Obliczamy szerokość nowej linii (unscaled)
+    const lineWidth = tempObj.width || 0;
+
+    // Obliczamy przesunięcie poziome (offset) w zależności od textAlign
+    // Offset jest w jednostkach lokalnych (przed skalowaniem)
+    let alignOffset = 0;
+
+    if (originalTextAlign === 'center') {
+      alignOffset = (originalWidth - lineWidth) / 2;
+    } else if (originalTextAlign === 'right') {
+      alignOffset = originalWidth - lineWidth;
     }
+    // Dla 'justify' traktujemy jak 'left' przy rozbijaniu na pojedyncze linie (lub można by próbować rozciągać, ale to skomplikowane)
 
+    // Skalujemy offset
+    const scaledAlignOffset = alignOffset * originalScaleX;
+
+    // Obliczamy wektory przesunięcia
+    // 1. Przesunięcie w dół (kolejne linie) - wzdłuż lokalnej osi Y
+    const distY = i * computedLineHeight;
+    const shiftY_X = -Math.sin(angleRad) * distY; // X component of Y-axis shift
+    const shiftY_Y = Math.cos(angleRad) * distY;  // Y component of Y-axis shift
+
+    // 2. Przesunięcie w poziomie (wyrównanie) - wzdłuż lokalnej osi X
+    const shiftX_X = Math.cos(angleRad) * scaledAlignOffset; // X component of X-axis shift
+    const shiftX_Y = Math.sin(angleRad) * scaledAlignOffset; // Y component of X-axis shift
+
+    // Finalna pozycja
+    const finalLeft = rootLeft + shiftY_X + shiftX_X;
+    const finalTop = rootTop + shiftY_Y + shiftX_Y;
+
+    // Finalny obiekt
     const newObj = new fabric.IText(line, {
       ...options,
       text: line,
-      top: lineTop,
-      left: lineLeft,
-      originX: 'left', // Wymuszamy origin 'left'/'top' dla spójności
+      top: finalTop,
+      left: finalLeft,
+      originX: 'left',
       originY: 'top',
       styles: newStyles as any,
       scaleX: t.scaleX,
@@ -1054,11 +1103,11 @@ export function splitTextByLines(canvas: fabric.Canvas, obj: fabric.FabricObject
       fontFamily: t.fontFamily,
       fontSize: t.fontSize,
       charSpacing: t.charSpacing,
-      textAlign: 'left', // Resetujemy align, bo teraz to jest jedna linia
+      textAlign: originalTextAlign, // Zachowujemy oryginalny align properties, choć dla jednej linii to ma małe znaczenie wizualne (chyba że edytujemy)
       fontWeight: t.fontWeight,
       fontStyle: t.fontStyle,
       underline: t.underline,
-      angle: t.angle, // Aplikujemy kąt
+      angle: t.angle,
     });
 
     // Aktualizuj nazwę
@@ -1141,3 +1190,152 @@ export function deleteObject(canvas: fabric.Canvas, obj: fabric.FabricObject): b
   canvas.renderAll();
   return true;
 }
+
+// ── Dopasowanie do szerokości/wysokości ───────────────────
+// ── Dopasowanie do szerokości/wysokości ───────────────────
+// ── Dopasowanie do szerokości/wysokości ───────────────────
+export function fitObjectToWidth(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  const w = safeW(canvas, 'safety');
+  const targetWidth = w;
+
+  // Calculate current visual width
+  obj.setCoords();
+  const boundingRect = obj.getBoundingRect();
+
+  // Sanity check: if object is tiny (e.g. empty text), don't explode it
+  if (boundingRect.width < 1) return;
+
+  // Oblicz skalę potrzebną, by bounding box miał szerokość targetWidth
+  // scaleFactor * currentWidth = targetWidth
+  // scaleFactor = targetWidth / currentWidth
+  const currentScaleX = obj.scaleX || 1;
+  const currentScaleY = obj.scaleY || 1;
+  const scaleFactor = targetWidth / boundingRect.width;
+
+  // Limit max scale to avoid explosion (e.g. max 500% larger than original 1.0 scale)
+  // But wait, if user wants to fit a small text to full width, maybe they want it big?
+  // Let's just prevent 'infinite' or absurd values.
+  // User complained about "too huge". Maybe limiting MAX FONT SIZE equivalent?
+
+  const newScaleX = currentScaleX * scaleFactor;
+  const newScaleY = currentScaleY * scaleFactor;
+
+  if (newScaleX > 0 && isFinite(newScaleX)) {
+    obj.set('scaleX', newScaleX);
+    obj.set('scaleY', newScaleY); // Maintain aspect ratio
+
+    // Center horizontally
+    centerObjectH(canvas, obj);
+    obj.setCoords();
+    canvas.renderAll();
+  }
+}
+
+export function fitObjectToHeight(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  const h = safeH(canvas, 'safety');
+  const targetHeight = h;
+
+  obj.setCoords();
+  const boundingRect = obj.getBoundingRect();
+  if (boundingRect.height < 1) return;
+
+  const currentScaleX = obj.scaleX || 1;
+  const currentScaleY = obj.scaleY || 1;
+  const scaleFactor = targetHeight / boundingRect.height;
+
+  const newScaleX = currentScaleX * scaleFactor;
+  const newScaleY = currentScaleY * scaleFactor;
+
+  if (newScaleY > 0 && isFinite(newScaleY)) {
+    obj.set('scaleX', newScaleX);
+    obj.set('scaleY', newScaleY);
+
+    // Center vertically
+    centerObjectV(canvas, obj);
+    obj.setCoords();
+    canvas.renderAll();
+  }
+}
+
+// ── Inteligentne ustawianie wyrównania tekstu ─────────────
+export function setTextAlignWithOrigin(
+  obj: fabric.IText,
+  align: 'left' | 'center' | 'right' | 'justify'
+) {
+  if (!obj) return;
+  const centerPoint = obj.getCenterPoint();
+  obj.set('textAlign', align);
+  if (align === 'left') {
+    obj.set('originX', 'left');
+  } else if (align === 'right') {
+    obj.set('originX', 'right');
+  } else {
+    obj.set('originX', 'center');
+  }
+  obj.setPositionByOrigin(centerPoint, 'center', 'center');
+  obj.setCoords();
+}
+
+// ── Alignment Helpers (New for Redesign) ──────────────────
+
+export function centerObjectH(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  // Use safe zone center, not canvas center (which might include rulers/padding)
+  const minX = safeMinX(canvas, 'safety');
+  const w = safeW(canvas, 'safety');
+  const centerX = minX + w / 2;
+
+  obj.setCoords();
+  const centerPoint = obj.getCenterPoint();
+  const dx = centerX - centerPoint.x;
+
+  obj.set('left', (obj.left || 0) + dx);
+  obj.setCoords();
+  canvas.renderAll();
+}
+
+export function centerObjectV(canvas: fabric.Canvas, obj: fabric.FabricObject) {
+  const minY = safeMinY(canvas, 'safety');
+  const h = safeH(canvas, 'safety');
+  const centerY = minY + h / 2;
+
+  obj.setCoords();
+  const centerPoint = obj.getCenterPoint();
+  const dy = centerY - centerPoint.y;
+
+  obj.set('top', (obj.top || 0) + dy);
+  obj.setCoords();
+  canvas.renderAll();
+}
+
+export function alignObjectToEdge(
+  canvas: fabric.Canvas,
+  obj: fabric.FabricObject,
+  edge: 'left' | 'right' | 'top' | 'bottom'
+) {
+  const minX = safeMinX(canvas, 'safety');
+  const minY = safeMinY(canvas, 'safety');
+  const maxX = safeMaxX(canvas, 'safety');
+  const maxY = safeMaxY(canvas, 'safety');
+
+  obj.setCoords();
+  const b = obj.getBoundingRect();
+
+  let dx = 0;
+  let dy = 0;
+
+  if (edge === 'left') {
+    dx = minX - b.left;
+  } else if (edge === 'right') {
+    dx = maxX - (b.left + b.width);
+  } else if (edge === 'top') {
+    dy = minY - b.top;
+  } else if (edge === 'bottom') {
+    dy = maxY - (b.top + b.height);
+  }
+
+  obj.set('left', (obj.left || 0) + dx);
+  obj.set('top', (obj.top || 0) + dy);
+  obj.setCoords();
+  canvas.renderAll();
+}
+

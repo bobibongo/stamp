@@ -150,6 +150,12 @@ export default function StampCanvas({
             if (active && (active as fabric.IText).isEditing) return;
 
             if (e.key === 'Delete' || e.key === 'Backspace') {
+                // Nie blokuj Backspace w polach tekstowych (poza canvasem)
+                const target = e.target as HTMLElement;
+                if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') {
+                    return;
+                }
+
                 e.preventDefault();
                 const deleted = deleteSelected(canvas);
                 if (deleted) {
